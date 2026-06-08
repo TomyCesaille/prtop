@@ -113,7 +113,9 @@ def mr_short_id(project_path: str, iid: int) -> str:
 
 
 def fmt_status(merge_status: str, fully_approved: bool) -> str:
-    if merge_status == "draft_status":
+    # `draft_status` and `not_approved` already encode the approval state — no
+    # need to tack on a redundant qualifier.
+    if merge_status in ("draft_status", "not_approved"):
         return merge_status
     return f"{merge_status} + {'fully_approved' if fully_approved else 'not_approved'}"
 
@@ -599,14 +601,16 @@ def run_once(*, interactive: bool) -> None:
             print(f"\n**{header}:**")
             print("\n".join(msgs))
 
+    # Tab colour reflects persistent state, not just transitions: an MR that
+    # has been fully-approved-and-mergeable for several cycles is still on me
+    # to merge.
     action_needed = (
         deploy_action_needed
         or any(info["has_conflicts"] for info in open_mrs.values())
         or any(info["merge_status"] == "need_rebase" for info in open_mrs.values())
         or any(
-            info["fully_approved"]
-            and not (previous_mrs.get(mr_id) or {}).get("fully_approved")
-            for mr_id, info in open_mrs.items()
+            info["fully_approved"] and info["merge_status"] == "mergeable"
+            for info in open_mrs.values()
         )
     )
 
