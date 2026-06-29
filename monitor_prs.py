@@ -112,12 +112,35 @@ def mr_short_id(project_path: str, iid: int) -> str:
     return f"{project_path.rsplit('/', 1)[-1]}!{iid}"
 
 
+_STATUS_EMOJI = {
+    "draft_status": "📝",
+    "not_approved": "👀",
+    "need_rebase": "🔁",
+    "conflict": "⚠️",
+    "ci_still_running": "⏳",
+    "ci_must_pass": "⏳",
+    "checking": "🔍",
+    "unchecked": "🔍",
+    "discussions_not_resolved": "💬",
+    "blocked_status": "🚧",
+    "requested_changes": "🔴",
+}
+
+
+def status_emoji(merge_status: str, fully_approved: bool) -> str:
+    if merge_status == "mergeable":
+        return "🚀" if fully_approved else "👀"
+    return _STATUS_EMOJI.get(merge_status, "🔹")
+
+
 def fmt_status(merge_status: str, fully_approved: bool) -> str:
     # `draft_status` and `not_approved` already encode the approval state — no
     # need to tack on a redundant qualifier.
     if merge_status in ("draft_status", "not_approved"):
-        return merge_status
-    return f"{merge_status} + {'fully_approved' if fully_approved else 'not_approved'}"
+        label = merge_status
+    else:
+        label = f"{merge_status} + {'fully_approved' if fully_approved else 'not_approved'}"
+    return f"{status_emoji(merge_status, fully_approved)} {label}"
 
 
 # ---------- Fetch & gather ----------
@@ -225,16 +248,36 @@ def diff_open_mrs(current: dict, previous: dict) -> list[str]:
     return alerts
 
 
+TITLE_MAX = 60
+
+
+def _truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _render_table(headers: list[str], rows: list[list[str]]) -> str:
+    widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headers)]
+
+    def line(cells: list[str]) -> str:
+        return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths)) + " |"
+
+    sep = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
+    return "\n".join([line(headers), sep, *(line(r) for r in rows)])
+
+
 def format_status_table(open_mrs: dict) -> str:
     if not open_mrs:
         return "_(no open MRs assigned)_"
-    rows = ["| Task | PR title | PR | Status |", "|---|---|---|---|"]
-    for mr_id, info in sorted(open_mrs.items()):
-        task = info.get("task_name") or "—"
-        title = info["title"]
-        status = fmt_status(info["merge_status"], info["fully_approved"])
-        rows.append(f"| {task} | {title} | `{mr_id}` | {status} |")
-    return "\n".join(rows)
+    rows = [
+        [
+            info.get("task_name") or "—",
+            _truncate(info["title"], TITLE_MAX),
+            f"`{mr_id}`",
+            fmt_status(info["merge_status"], info["fully_approved"]),
+        ]
+        for mr_id, info in sorted(open_mrs.items())
+    ]
+    return _render_table(["Task", "PR title", "PR", "Status"], rows)
 
 
 # ---------- Interactive prompts ----------
