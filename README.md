@@ -23,9 +23,24 @@ State lives in `~/.claude/pr-monitor-state.json`.
 # One check, then exit. Looping is the caller's job
 # (/monitor-prs-looped runs the skill on an interval).
 python3 monitor_prs.py
+
+# Passive watcher: re-run the check on an interval and exit as soon as the
+# report changes (activity alert, deployment progress, action flip) — designed
+# to be launched as a background task by an LLM session so it gets re-invoked
+# exactly when something needs attention. Prints a TIMEOUT line after the cap.
+bash watch_prs.sh                 # defaults: 300s interval, 7200s cap
+bash watch_prs.sh 60 3600         # custom interval / cap
 ```
 
-Exit code is 1 (with the error on stderr) if `glab` fails.
+Exit code is 1 (with the error on stderr) if `glab` fails; the watcher also
+exits 1 when a check fails.
+
+The watcher's first check only records a baseline (unless it already carries
+an activity alert) — run a one-shot check and deal with pending items before
+starting it.
+
+`PR_MONITOR_STATE_FILE` overrides the state file path (both scripts honour
+it) — useful for testing against a scratch copy.
 
 ## What one run does
 

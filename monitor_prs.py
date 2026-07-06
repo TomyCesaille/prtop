@@ -13,6 +13,7 @@ jobs — it prints what changed and what awaits action, for the calling LLM
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -30,7 +31,10 @@ from urllib.parse import quote
 GITLAB_USERNAME = "jdoe"
 GITLAB_GROUP = "acme"
 TRIGRAM = "dev"
-STATE_FILE = Path.home() / ".claude" / "pr-monitor-state.json"
+STATE_FILE = Path(
+    os.environ.get("PR_MONITOR_STATE_FILE")
+    or Path.home() / ".claude" / "pr-monitor-state.json"
+)
 
 PIPELINE_INFLIGHT = {
     "running", "pending", "preparing", "created",

@@ -14,6 +14,12 @@ interpretation table in sync.
 - **The skill** (`~/.claude/commands/monitor-prs.md`): relays the
   report, asks the user for confirmations, and performs approved actions via
   `glab api`. Looping lives in `monitor-prs-looped.md`.
+- **`watch_prs.sh`**: passive watcher for task-development sessions. Re-runs
+  `monitor_prs.py` on an interval and exits when the report changes (activity
+  alert, or any diff in the normalized output) or on a quiet-cap TIMEOUT, so a
+  backgrounded run re-invokes the calling agent at the right moment. The
+  "Passive PR monitoring" section of the global `~/.claude/CLAUDE.md` tells
+  sessions when to start it.
 
 ## Source of truth
 
@@ -123,22 +129,19 @@ Append the full path (e.g. `"acme/common/foo"`) to
 
 There is no test suite. Don't run the script against the live state file for
 testing — a run advances the diff baseline and swallows the user's pending
-alerts. Instead, import the module, point `STATE_FILE` at a scratch copy, and
-call `run_once()`:
+alerts. Point `PR_MONITOR_STATE_FILE` at a scratch copy instead:
 
-```python
-import importlib.util
-from pathlib import Path
-
-spec = importlib.util.spec_from_file_location("mp", "monitor_prs.py")
-mp = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mp)
-mp.STATE_FILE = Path("/tmp/scratch-state.json")  # copy of the real one
-mp.run_once()
+```bash
+cp ~/.claude/pr-monitor-state.json /tmp/scratch-state.json
+PR_MONITOR_STATE_FILE=/tmp/scratch-state.json python3 monitor_prs.py
 ```
 
 To exercise `track_vanished_mrs`, seed the scratch state's `open_mrs` with a
 real, already-merged MR (with `project_path` + `iid`) and run.
+
+To test `watch_prs.sh` deterministically, copy it next to a stub
+`monitor_prs.py` whose output changes on the Nth run — the watcher only knows
+"the script in my directory", so no GitLab is involved.
 
 ## What NOT to do
 
