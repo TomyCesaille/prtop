@@ -503,6 +503,9 @@ def set_iterm_tab_color(action_needed: bool) -> None:
 # ---------- Main run ----------
 
 def run_once() -> None:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n=== monitor-prs @ {ts} ===", flush=True)
+
     state = load_state()
     previous_mrs = state.get("open_mrs") or {}
     first_run = not previous_mrs
@@ -513,9 +516,6 @@ def run_once() -> None:
 
     state["open_mrs"] = strip_volatile(open_mrs)
     deploy_msgs, deploy_action_needed = check_deployments(state)
-
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n=== monitor-prs @ {ts} ===")
 
     if first_run:
         print("\nFirst run — baseline recorded. Watching:\n")
