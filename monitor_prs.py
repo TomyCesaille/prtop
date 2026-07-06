@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-Report on GitLab merge requests assigned to jdoe and on deployment
-pipelines of recently merged MRs. Data-gathering engine behind the
-/monitor-prs Claude Code skill.
+Report on GitLab MRs assigned to jdoe and their deployment pipelines.
+
+Data-gathering engine behind the /monitor-prs Claude Code skill.
 
 Talks to GitLab only via the `glab` CLI; no LLM tokens consumed.
 Strictly read-only against GitLab: it never merges, rebases, or triggers
 jobs — it prints what changed and what awaits action, for the calling LLM
-(or human) to act on. Runs one check and exits; looping is the caller's job.
+(or human) to act on. Runs one check and exits by default; `--loop` repeats
+on a wall-clock-aligned interval for standalone terminal use.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -35,6 +37,7 @@ STATE_FILE = Path(
     os.environ.get("PR_MONITOR_STATE_FILE")
     or Path.home() / ".claude" / "pr-monitor-state.json"
 )
+DEFAULT_LOOP_INTERVAL = 300
 
 PIPELINE_INFLIGHT = {
     "running", "pending", "preparing", "created",
@@ -466,6 +469,25 @@ def check_deployments(state: dict) -> tuple[list[str], bool]:
     return msgs, action_needed
 
 
+# ---------- Wall-clock alignment ----------
+
+def sleep_until_next_tick(interval: int) -> None:
+    """Sleep until the next multiple of `interval` seconds past the local hour.
+
+    With interval=300, ticks land at :00, :05, :10, … local time (in any
+    timezone offset by a whole number of minutes from UTC).
+    """
+    now = time.time()
+    next_tick = (int(now) // interval + 1) * interval
+    delay = next_tick - now
+    next_dt = datetime.fromtimestamp(next_tick)
+    print(
+        f"\nSleeping {delay:.0f}s until next tick at {next_dt:%H:%M:%S}…",
+        flush=True,
+    )
+    time.sleep(delay)
+
+
 # ---------- iTerm tab color ----------
 
 def set_iterm_tab_color(action_needed: bool) -> None:
@@ -534,11 +556,35 @@ def run_once() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument(
+        "--loop", type=int, nargs="?", const=DEFAULT_LOOP_INTERVAL, default=None,
+        metavar="SECONDS",
+        help=(
+            "Repeat forever, aligned to wall-clock ticks "
+            f"(default {DEFAULT_LOOP_INTERVAL}s). Ctrl+C to stop."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.loop is None:
+        try:
+            run_once()
+        except GlabError as e:
+            print(f"glab error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    print(f"Looping every {args.loop}s, aligned to wall-clock ticks. Ctrl+C to stop.")
     try:
-        run_once()
-    except GlabError as e:
-        print(f"glab error: {e}", file=sys.stderr)
-        return 1
+        while True:
+            try:
+                run_once()
+            except GlabError as e:
+                print(f"glab error (continuing): {e}", file=sys.stderr)
+            sleep_until_next_tick(args.loop)
+    except KeyboardInterrupt:
+        print("\nStopped.")
     return 0
 
 

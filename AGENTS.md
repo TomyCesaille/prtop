@@ -54,7 +54,8 @@ Single file, stdlib only. Sections in order:
    status per run (no stage machine): staging pipeline → prod job →
    success/failure/awaiting-manual-trigger.
 8. **iTerm tab colour** — OSC escape codes, emitted once at the very end.
-9. **`run_once` / `main`** — top-level flow; one check, then exit.
+9. **`run_once` / `main`** — top-level flow and CLI; single check by
+   default, `--loop [SECONDS]` for wall-clock-aligned repetition.
 
 ## State schema
 
@@ -104,7 +105,9 @@ field; `check_deployments` pops it.
 - **The script never mutates GitLab.** Merging, rebasing, and playing jobs
   are the skill's job, gated on user confirmation there. Don't add `--method`
   support back to `glab_api`.
-- **One run per invocation.** No loop, no sleep-until-tick, no prompts.
+- **One run per invocation by default.** `--loop [SECONDS]` is the only loop
+  (wall-clock-aligned, for standalone terminal use; `glab` errors are
+  non-fatal there). Never add prompts back in either mode.
 - **First run** records a baseline and reports no diffs — never alert on MRs
   seen for the first time.
 - **Rebase safety info**: an MR with approvals in a project outside

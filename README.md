@@ -20,9 +20,13 @@ State lives in `~/.claude/pr-monitor-state.json`.
 ## Usage
 
 ```bash
-# One check, then exit. Looping is the caller's job
-# (/monitor-prs-looped runs the skill on an interval).
+# One check, then exit (what the /monitor-prs skill runs).
 python3 monitor_prs.py
+
+# Standalone terminal mode: repeat forever, aligned to wall-clock ticks
+# (:00, :05, :10, … with the default 300s). Ctrl+C to stop.
+python3 monitor_prs.py --loop        # every 5 min
+python3 monitor_prs.py --loop 600    # custom interval in seconds
 
 # Passive watcher: re-run the check on an interval and exit as soon as the
 # report changes (activity alert, deployment progress, action flip) — designed
@@ -33,7 +37,8 @@ bash watch_prs.sh 60 3600         # custom interval / cap
 ```
 
 Exit code is 1 (with the error on stderr) if `glab` fails; the watcher also
-exits 1 when a check fails.
+exits 1 when a check fails. In `--loop` mode `glab` errors are non-fatal —
+the cycle logs them to stderr and retries at the next tick.
 
 The watcher's first check only records a baseline (unless it already carries
 an activity alert) — run a one-shot check and deal with pending items before
