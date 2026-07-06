@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Monitor GitLab merge requests assigned to jdoe and track production
-deployments. Local Python port of the /monitor-prs Claude Code skill.
+Report on GitLab merge requests assigned to jdoe and on deployment
+pipelines of recently merged MRs. Data-gathering engine behind the
+/monitor-prs Claude Code skill.
 
 Talks to GitLab only via the `glab` CLI; no LLM tokens consumed.
-Shares the same state file as the original skill so the two can be used
-interchangeably.
+Strictly read-only against GitLab: it never merges, rebases, or triggers
+jobs — it prints what changed and what awaits action, for the calling LLM
+(or human) to act on. Runs one check and exits; looping is the caller's job.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shlex
@@ -30,7 +31,6 @@ GITLAB_USERNAME = "jdoe"
 GITLAB_GROUP = "acme"
 TRIGRAM = "dev"
 STATE_FILE = Path.home() / ".claude" / "pr-monitor-state.json"
-DEFAULT_LOOP_INTERVAL = 300
 
 PIPELINE_INFLIGHT = {
     "running", "pending", "preparing", "created",
@@ -41,7 +41,7 @@ PROD_JOB_NAME_RE = re.compile(r"prod|production", re.I)
 TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}$")
 
 # Projects where approvals are known to survive a rebase.
-# Other projects (notably portal/*) reset approvals on push, so we ask first.
+# Other projects (notably portal/*) reset approvals on push.
 SAFE_TO_REBASE_AFTER_APPROVAL = {
     "acme/common/frontend",
 }
@@ -62,12 +62,8 @@ def _run(cmd: list[str]) -> str:
     return res.stdout
 
 
-def glab_api(path: str, *, method: str = "GET") -> Any:
-    cmd = ["glab", "api"]
-    if method != "GET":
-        cmd += ["--method", method]
-    cmd.append(path)
-    out = _run(cmd)
+def glab_api(path: str) -> Any:
+    out = _run(["glab", "api", path])
     return json.loads(out) if out.strip() else None
 
 
@@ -180,12 +176,12 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
         "fully_approved": bool(approvals.get("approved")),
         "has_conflicts": bool(full.get("has_conflicts")),
         "merge_status": full.get("detailed_merge_status", "unknown"),
+        "project_path": project_path,
+        "iid": iid,
+        "web_url": full.get("web_url"),
         "last_checked": datetime.now(timezone.utc).isoformat(),
         # Transient (stripped before save):
-        "_project_path": project_path,
         "_project_encoded": encoded,
-        "_iid": iid,
-        "_web_url": full.get("web_url"),
     }
     return mr_short_id(project_path, iid), info
 
@@ -241,12 +237,58 @@ def diff_open_mrs(current: dict, previous: dict) -> list[str]:
 
         if msgs:
             alerts.append(f"- `{mr_id}` — " + ", ".join(msgs))
-
-    for mr_id in sorted(previous):
-        if mr_id not in current:
-            alerts.append(f"- `{mr_id}` — closed/merged")
     return alerts
 
+
+def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
+    """MRs that disappeared from the open list since last check: figure out
+    whether they were merged, and if so start tracking their main pipeline."""
+    alerts: list[str] = []
+    deployments = state.setdefault("deployments", {})
+
+    for mr_id in sorted(previous):
+        if mr_id in current:
+            continue
+        prev = previous[mr_id]
+        project_path = prev.get("project_path")
+        iid = prev.get("iid")
+        if not project_path or not iid:
+            alerts.append(f"- `{mr_id}` — closed/merged.")
+            continue
+
+        encoded = quote(project_path, safe="")
+        try:
+            full = glab_api(f"projects/{encoded}/merge_requests/{iid}") or {}
+        except GlabError:
+            alerts.append(f"- `{mr_id}` — closed/merged (could not fetch final state).")
+            continue
+
+        if full.get("state") != "merged":
+            alerts.append(f"- `{mr_id}` — {full.get('state', 'closed')} without merging.")
+            continue
+
+        sha = full.get("merge_commit_sha") or full.get("squash_commit_sha") or full.get("sha")
+        pipeline = find_main_pipeline_for_sha(encoded, sha)
+        if pipeline is None:
+            pipelines = glab_api(f"projects/{encoded}/pipelines?ref=main&per_page=5") or []
+            pipeline = pipelines[0] if pipelines else None
+        if pipeline is None:
+            alerts.append(f"- `{mr_id}` — merged, but no main pipeline found to track.")
+            continue
+
+        deployments[mr_id] = {
+            "title": prev.get("title", ""),
+            "project": encoded,
+            "project_path": project_path,
+            "pipeline_id": pipeline["id"],
+            "pipeline_status": pipeline.get("status"),
+            "pipeline_url": pipeline.get("web_url"),
+        }
+        alerts.append(f"- `{mr_id}` — merged; now tracking main pipeline #{pipeline['id']}.")
+    return alerts
+
+
+# ---------- Rendering ----------
 
 TITLE_MAX = 60
 
@@ -280,56 +322,44 @@ def format_status_table(open_mrs: dict) -> str:
     return _render_table(["Task", "PR title", "PR", "Status"], rows)
 
 
-# ---------- Interactive prompts ----------
+# ---------- Action suggestions (info only — nothing is performed) ----------
 
-def ask_yes_no(question: str, *, interactive: bool) -> bool:
-    if not interactive or not sys.stdin.isatty():
-        return False
-    while True:
-        ans = input(f"{question} [y/N] ").strip().lower()
-        if ans in ("y", "yes"):
-            return True
-        if ans in ("", "n", "no"):
-            return False
+def merge_notes(open_mrs: dict) -> list[str]:
+    notes: list[str] = []
+    for mr_id, info in sorted(open_mrs.items()):
+        if info["fully_approved"] and info["merge_status"] == "mergeable":
+            url = info.get("web_url") or ""
+            notes.append(f"- `{mr_id}` — fully approved and mergeable; ready to merge. {url}".rstrip())
+    return notes
 
 
-# ---------- Special actions: rebase / merge ----------
-
-def rebase_mr(encoded_project: str, iid: int) -> None:
-    glab_api(f"projects/{encoded_project}/merge_requests/{iid}/rebase", method="PUT")
-
-
-def maybe_rebase_mrs(open_mrs: dict, *, interactive: bool) -> list[str]:
-    msgs: list[str] = []
-    for mr_id, info in open_mrs.items():
-        if info["merge_status"] != "need_rebase":
-            continue
+def attention_notes(open_mrs: dict) -> list[str]:
+    notes: list[str] = []
+    for mr_id, info in sorted(open_mrs.items()):
         if info["has_conflicts"]:
-            msgs.append(
-                f"- `{mr_id}` — needs rebase but has conflicts (manual resolution required)."
+            notes.append(f"- `{mr_id}` — has merge conflicts; manual resolution required.")
+        elif info["merge_status"] != "need_rebase":
+            continue
+        elif (
+            (info["fully_approved"] or info["approvals"])
+            and info["project_path"] not in SAFE_TO_REBASE_AFTER_APPROVAL
+        ):
+            notes.append(
+                f"- `{mr_id}` — needs rebase, but it has approvals and the project may "
+                f"reset approvals on push; confirm before rebasing."
             )
-            continue
+        else:
+            notes.append(f"- `{mr_id}` — needs rebase; safe to rebase automatically.")
+    return notes
 
-        approved = info["fully_approved"] or bool(info["approvals"])
-        risky = approved and info["_project_path"] not in SAFE_TO_REBASE_AFTER_APPROVAL
 
-        if risky:
-            if ask_yes_no(
-                f"`{mr_id}` needs rebase but has approvals; project may wipe approvals on push. "
-                "Rebase anyway? 🔁",
-                interactive=interactive,
-            ):
-                rebase_mr(info["_project_encoded"], info["_iid"])
-                msgs.append(f"- `{mr_id}` — rebase requested.")
-            else:
-                msgs.append(
-                    f"- `{mr_id}` — needs rebase; **skipping** to avoid losing approvals."
-                )
-            continue
+# ---------- Deployments ----------
 
-        rebase_mr(info["_project_encoded"], info["_iid"])
-        msgs.append(f"- `{mr_id}` — rebase requested.")
-    return msgs
+def find_prod_job(jobs: list[dict]) -> dict | None:
+    for j in jobs:
+        if PROD_JOB_NAME_RE.search(j.get("name", "")):
+            return j
+    return None
 
 
 def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries: int = 3) -> dict | None:
@@ -345,77 +375,6 @@ def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries
     return None
 
 
-def merge_and_track(mr_id: str, info: dict, state: dict) -> str:
-    encoded = info["_project_encoded"]
-    iid = info["_iid"]
-    project_path = info["_project_path"]
-
-    merge_resp = glab_api(f"projects/{encoded}/merge_requests/{iid}/merge", method="PUT") or {}
-    target_sha = merge_resp.get("merge_commit_sha") or merge_resp.get("sha")
-
-    pipeline = find_main_pipeline_for_sha(encoded, target_sha)
-    if pipeline is None:
-        pipelines = glab_api(f"projects/{encoded}/pipelines?ref=main&per_page=5") or []
-        pipeline = pipelines[0] if pipelines else None
-
-    if pipeline is None:
-        return f"- `{mr_id}` — merged, but could not find a main pipeline to track."
-
-    state.setdefault("deployments", {})[mr_id] = {
-        "title": info["title"],
-        "project": encoded,
-        "project_path": project_path,
-        "pipeline_id": pipeline["id"],
-        "pipeline_status": pipeline.get("status"),
-        "pipeline_url": pipeline.get("web_url"),
-        "stage": "staging",
-    }
-    return f"- `{mr_id}` — merged, tracking pipeline #{pipeline['id']}."
-
-
-def maybe_merge_fully_approved(
-    open_mrs: dict, previous: dict, state: dict, *, interactive: bool
-) -> list[str]:
-    msgs: list[str] = []
-    merged: list[str] = []
-
-    for mr_id, info in list(open_mrs.items()):
-        if not info["fully_approved"]:
-            continue
-        prev = previous.get(mr_id) or {}
-        if prev.get("fully_approved"):
-            continue
-
-        if info["merge_status"] != "mergeable":
-            msgs.append(
-                f"- `{mr_id}` is fully approved but merge status is "
-                f"`{info['merge_status']}` — can't merge yet."
-            )
-            continue
-
-        if ask_yes_no(
-            f"`{mr_id}` is now fully approved. Merge it? 🚀",
-            interactive=interactive,
-        ):
-            msgs.append(merge_and_track(mr_id, info, state))
-            merged.append(mr_id)
-        else:
-            msgs.append(f"- `{mr_id}` is now fully approved. Want me to merge it? 🚀")
-
-    for mr_id in merged:
-        open_mrs.pop(mr_id, None)
-    return msgs
-
-
-# ---------- Deployments ----------
-
-def find_prod_job(jobs: list[dict]) -> dict | None:
-    for j in jobs:
-        if PROD_JOB_NAME_RE.search(j.get("name", "")):
-            return j
-    return None
-
-
 def newer_main_pipeline_shipped_prod(encoded_project: str, after_pipeline_id: int) -> bool:
     pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=10") or []
     for p in pipelines:
@@ -428,166 +387,79 @@ def newer_main_pipeline_shipped_prod(encoded_project: str, after_pipeline_id: in
     return False
 
 
-def trigger_prod_job(encoded_project: str, job_id: int) -> None:
-    glab_api(f"projects/{encoded_project}/jobs/{job_id}/play", method="POST")
-
-
-def check_deployments(state: dict, *, interactive: bool) -> tuple[list[str], bool]:
+def check_deployments(state: dict) -> tuple[list[str], bool]:
     """Returns (messages, action_needed)."""
     deployments = state.get("deployments") or {}
-    if not deployments:
-        return [], False
-
     msgs: list[str] = []
     action_needed = False
     to_remove: list[str] = []
 
-    for mr_id, dep in list(deployments.items()):
+    for mr_id, dep in deployments.items():
         try:
             project = dep["project"]
             pipeline_id = dep["pipeline_id"]
-            stage = dep.get("stage", "staging")
+            dep.pop("stage", None)  # legacy field from the interactive era
 
             pipeline = glab_api(f"projects/{project}/pipelines/{pipeline_id}") or {}
             status = pipeline.get("status")
             dep["pipeline_status"] = status
 
-            if stage == "staging":
-                if status in PIPELINE_INFLIGHT:
-                    continue
-                if status == "failed":
-                    msgs.append(
-                        f"- `{mr_id}` staging pipeline **failed**! {pipeline.get('web_url', '')}"
-                    )
-                    action_needed = True
-                    continue
-                if status != "success":
-                    msgs.append(f"- `{mr_id}` staging pipeline status: {status} (unhandled)")
-                    continue
-
-                jobs = glab_api(
-                    f"projects/{project}/pipelines/{pipeline_id}/jobs?per_page=100"
-                ) or []
-                prod = find_prod_job(jobs)
-                if prod is None:
-                    msgs.append(f"- `{mr_id}` deployed (staging only, no prod job).")
-                    to_remove.append(mr_id)
-                    continue
-
-                dep["prod_job_id"] = prod["id"]
-                pstatus = prod.get("status")
-
-                if pstatus == "success":
-                    msgs.append(f"- `{mr_id}` deployed to production successfully.")
-                    to_remove.append(mr_id)
-                    continue
-                if pstatus == "failed":
-                    msgs.append(
-                        f"- `{mr_id}` production deployment **failed**! "
-                        f"{prod.get('web_url', '')}"
-                    )
-                    action_needed = True
-                    continue
-                if pstatus in ("manual", "created", "skipped"):
-                    if newer_main_pipeline_shipped_prod(project, pipeline_id):
-                        msgs.append(
-                            f"- `{mr_id}` already shipped to production via a later main pipeline."
-                        )
-                        to_remove.append(mr_id)
-                        continue
-                    dep["stage"] = "staging_done"
-                    msgs.append(
-                        f"- `{mr_id}` — staging is healthy. "
-                        f"Want me to trigger production deployment? 🚀"
-                    )
-                    action_needed = True
-                    if ask_yes_no(f"Trigger production deployment for `{mr_id}`? 🚀",
-                                  interactive=interactive):
-                        trigger_prod_job(project, prod["id"])
-                        dep["stage"] = "prod_approved"
-                        msgs.append(f"- `{mr_id}` — production job triggered.")
-                    continue
-
-                msgs.append(f"- `{mr_id}` prod job status: {pstatus} (unhandled)")
+            if status in PIPELINE_INFLIGHT:
+                msgs.append(f"- `{mr_id}` — staging pipeline {status}.")
+                continue
+            if status == "failed":
+                msgs.append(
+                    f"- `{mr_id}` — staging pipeline **failed**! {pipeline.get('web_url', '')}"
+                )
+                action_needed = True
+                continue
+            if status != "success":
+                msgs.append(f"- `{mr_id}` — staging pipeline status: {status} (unhandled).")
                 continue
 
-            if stage == "staging_done":
-                if ask_yes_no(
-                    f"`{mr_id}` staging done. Trigger production deployment now? 🚀",
-                    interactive=interactive,
-                ):
-                    job_id = dep.get("prod_job_id")
-                    if not job_id:
-                        jobs = glab_api(
-                            f"projects/{project}/pipelines/{pipeline_id}/jobs?per_page=100"
-                        ) or []
-                        prod = find_prod_job(jobs)
-                        if prod:
-                            job_id = prod["id"]
-                            dep["prod_job_id"] = job_id
-                    if job_id:
-                        trigger_prod_job(project, job_id)
-                        dep["stage"] = "prod_approved"
-                        msgs.append(f"- `{mr_id}` — production job triggered.")
-                    else:
-                        msgs.append(f"- `{mr_id}` — could not find manual production job.")
-                        action_needed = True
+            jobs = glab_api(f"projects/{project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
+            prod = find_prod_job(jobs)
+            if prod is None:
+                msgs.append(f"- `{mr_id}` — deployed (staging only, no prod job).")
+                to_remove.append(mr_id)
+                continue
+
+            dep["prod_job_id"] = prod["id"]
+            pstatus = prod.get("status")
+
+            if pstatus == "success":
+                msgs.append(f"- `{mr_id}` — deployed to production successfully.")
+                to_remove.append(mr_id)
+            elif pstatus == "failed":
+                msgs.append(
+                    f"- `{mr_id}` — production deployment **failed**! {prod.get('web_url', '')}"
+                )
+                action_needed = True
+            elif pstatus in PIPELINE_INFLIGHT:
+                msgs.append(f"- `{mr_id}` — production deployment {pstatus}.")
+            elif pstatus in ("manual", "created", "skipped"):
+                if newer_main_pipeline_shipped_prod(project, pipeline_id):
+                    msgs.append(
+                        f"- `{mr_id}` — already shipped to production via a later main pipeline."
+                    )
+                    to_remove.append(mr_id)
                 else:
                     msgs.append(
-                        f"- `{mr_id}` — still waiting for your approval to deploy to production."
+                        f"- `{mr_id}` — staging is healthy; production job #{prod['id']} "
+                        f"awaits a manual trigger. {prod.get('web_url', '')}"
                     )
                     action_needed = True
-                continue
-
-            if stage == "prod_approved":
-                job_id = dep.get("prod_job_id")
-                if not job_id:
-                    msgs.append(f"- `{mr_id}` — no prod_job_id in state; can't track.")
-                    action_needed = True
-                    continue
-                job = glab_api(f"projects/{project}/jobs/{job_id}") or {}
-                jstatus = job.get("status")
-                if jstatus == "success":
-                    msgs.append(f"- `{mr_id}` deployed to production successfully.")
-                    to_remove.append(mr_id)
-                elif jstatus == "failed":
-                    msgs.append(
-                        f"- `{mr_id}` production deployment **failed**! "
-                        f"{job.get('web_url', '')}"
-                    )
-                    action_needed = True
-                # else: still running, stay quiet
-                continue
-
-            msgs.append(f"- `{mr_id}` — unknown stage `{stage}`.")
+            else:
+                msgs.append(f"- `{mr_id}` — prod job status: {pstatus} (unhandled).")
 
         except GlabError as e:
-            msgs.append(f"- `{mr_id}` deployment check failed: {e}")
+            msgs.append(f"- `{mr_id}` — deployment check failed: {e}")
             action_needed = True
 
     for mr_id in to_remove:
         deployments.pop(mr_id, None)
 
     return msgs, action_needed
-
-
-# ---------- Wall-clock alignment ----------
-
-def sleep_until_next_tick(interval: int) -> None:
-    """Sleep until the next multiple of `interval` seconds past the local hour.
-
-    With interval=300, ticks land at :00, :05, :10, … local time (in any
-    timezone offset by a whole number of minutes from UTC).
-    """
-    now = time.time()
-    next_tick = (int(now) // interval + 1) * interval
-    delay = next_tick - now
-    next_dt = datetime.fromtimestamp(next_tick)
-    print(
-        f"\nSleeping {delay:.0f}s until next tick at {next_dt:%H:%M:%S}…",
-        flush=True,
-    )
-    time.sleep(delay)
 
 
 # ---------- iTerm tab color ----------
@@ -604,21 +476,17 @@ def set_iterm_tab_color(action_needed: bool) -> None:
 
 # ---------- Main run ----------
 
-def run_once(*, interactive: bool) -> None:
+def run_once() -> None:
     state = load_state()
     previous_mrs = state.get("open_mrs") or {}
     first_run = not previous_mrs
 
     open_mrs = gather_all_mrs()
     alerts = diff_open_mrs(open_mrs, previous_mrs)
-
-    merge_msgs = maybe_merge_fully_approved(
-        open_mrs, previous_mrs, state, interactive=interactive
-    )
-    rebase_msgs = maybe_rebase_mrs(open_mrs, interactive=interactive)
+    alerts += track_vanished_mrs(open_mrs, previous_mrs, state)
 
     state["open_mrs"] = strip_volatile(open_mrs)
-    deploy_msgs, deploy_action_needed = check_deployments(state, interactive=interactive)
+    deploy_msgs, deploy_action_needed = check_deployments(state)
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"\n=== monitor-prs @ {ts} ===")
@@ -636,17 +504,16 @@ def run_once(*, interactive: bool) -> None:
         print(format_status_table(open_mrs))
 
     for header, msgs in [
-        ("Approvals / merge", merge_msgs),
-        ("Rebase", rebase_msgs),
+        ("Ready to merge", merge_notes(open_mrs)),
+        ("Needs attention", attention_notes(open_mrs)),
         ("Deployments", deploy_msgs),
     ]:
         if msgs:
             print(f"\n**{header}:**")
             print("\n".join(msgs))
 
-    # Tab colour reflects persistent state, not just transitions: an MR that
-    # has been fully-approved-and-mergeable for several cycles is still on me
-    # to merge.
+    # Reflects persistent state, not just transitions: an MR that has been
+    # fully-approved-and-mergeable for several cycles is still on me to merge.
     action_needed = (
         deploy_action_needed
         or any(info["has_conflicts"] for info in open_mrs.values())
@@ -658,45 +525,16 @@ def run_once(*, interactive: bool) -> None:
     )
 
     save_state(state)
+    print(f"\nAction needed: {'yes' if action_needed else 'no'}")
     set_iterm_tab_color(action_needed)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    parser.add_argument(
-        "--interval", type=int, default=DEFAULT_LOOP_INTERVAL,
-        help=f"Seconds between iterations (default {DEFAULT_LOOP_INTERVAL}).",
-    )
-    parser.add_argument(
-        "--once", action="store_true",
-        help="Run a single iteration and exit (debug/testing escape hatch).",
-    )
-    parser.add_argument(
-        "--no-interactive", action="store_true",
-        help="Never prompt — read-only / report-only.",
-    )
-    args = parser.parse_args()
-
-    interactive = sys.stdin.isatty() and not args.no_interactive
-
-    if args.once:
-        try:
-            run_once(interactive=interactive)
-        except GlabError as e:
-            print(f"glab error: {e}", file=sys.stderr)
-            return 1
-        return 0
-
-    print(f"Looping every {args.interval}s, aligned to wall-clock ticks. Ctrl+C to stop.")
     try:
-        while True:
-            try:
-                run_once(interactive=interactive)
-            except GlabError as e:
-                print(f"glab error (continuing): {e}", file=sys.stderr)
-            sleep_until_next_tick(args.interval)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+        run_once()
+    except GlabError as e:
+        print(f"glab error: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
