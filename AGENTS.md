@@ -100,10 +100,15 @@ field; `check_deployments` pops it.
   `deploy.*prod|prod.*deploy` (`DEPLOY_PROD_JOB_RE`, case-insensitive). This
   deliberately excludes prod *test*/*migrate*/*route-traffic* jobs (e.g.
   `test_scenarios_production`, `migrate_production`, `route_traffic_production`)
-  that a looser `prod|production` match would wrongly pick up. Job names vary by
-  repo: `deploy-production`, `deploy_production`, `deploy_production_heavy_duty`,
-  … — the regex covers all. A pipeline counts as having shipped prod when its
-  prod-deploy jobs are all `success`/`skipped` with at least one `success`.
+  that a looser `prod|production` match would wrongly pick up.
+- **"Shipped prod" is judged by the _primary_ deploy job** — the one whose name
+  is exactly `deploy_production`/`deploy-production` (`PRIMARY_PROD_DEPLOY_RE`),
+  via `primary_prod_jobs` → `shipped_prod`. The auxiliary suffixed variants
+  (`deploy_production_heavy_duty`, `deploy_production_certificates_exporter`, …)
+  are separate side services, often left `manual`/`created` indefinitely;
+  gating on *all* prod-deploy jobs succeeding wrongly reports the app as
+  never-deployed. Only when no canonical-named job exists does it fall back to
+  "any prod-deploy job succeeded".
 - Right after a merge, the pipeline on `main` may not exist yet.
   `find_main_pipeline_for_sha` polls a few times before giving up, then
   `track_vanished_mrs` falls back to the most recent main pipeline.
