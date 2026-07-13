@@ -284,10 +284,8 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join([line(headers), sep, *(line(r) for r in rows)])
 
 
-def format_status_table(open_mrs: dict) -> str:
-    if not open_mrs:
-        return "_(no open MRs assigned)_"
-    rows = [
+def open_mr_rows(open_mrs: dict) -> list[list[str]]:
+    return [
         [
             _truncate(info.get("task_name") or "—", TASK_MAX),
             _truncate(info["title"], TITLE_MAX),
@@ -296,7 +294,6 @@ def format_status_table(open_mrs: dict) -> str:
         ]
         for mr_id, info in sorted(open_mrs.items())
     ]
-    return _render_table(["Task", "PR title", "PR", "Status"], rows)
 
 
 # ---------- Deployments ----------
@@ -478,14 +475,16 @@ def run_once() -> None:
     track_vanished_mrs(open_mrs, previous_mrs, state)
 
     state["open_mrs"] = strip_volatile(open_mrs)
-    pending_deploys = check_deployments(state)
+    # Merged-but-not-yet-deployed MRs go at the bottom of the same table; their
+    # deploy status (🕹️ awaiting prod trigger, 🚀 prod deploying, …) sits in the
+    # Status column right next to the open MRs' review status.
+    rows = open_mr_rows(open_mrs) + check_deployments(state)
 
     print()
-    print(format_status_table(open_mrs))
-
-    if pending_deploys:
-        print("\n**Merged, awaiting production deploy:**\n")
-        print(_render_table(["Task", "PR title", "PR", "Deploy status"], pending_deploys))
+    if rows:
+        print(_render_table(["Task", "PR title", "PR", "Status"], rows))
+    else:
+        print("_(no open MRs or pending deploys)_")
 
     # Action needed tracks only what's on me for an open PR — merge, rebase, or
     # resolve conflicts. Deployment progress is reported above but never flips

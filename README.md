@@ -48,35 +48,35 @@ it) — useful for testing against a scratch copy.
 
 ## What one run does
 
-The report is deliberately just **two tables plus an `Action needed` line** — no
-activity-delta alerts, no prose suggestion sections. The tables' Status / Deploy
-columns are the whole picture.
+The report is deliberately just **one table plus an `Action needed` line** — no
+activity-delta alerts, no prose suggestion sections. The table's Status column is
+the whole picture.
 
 1. **Lists open MRs** assigned to `jdoe` in the `acme` group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
    (calls run in parallel across MRs).
-3. **Prints the open-MRs table** — `Task | PR title | PR | Status`, where Status
-   carries an emoji + label (draft, not-approved, need-rebase, conflict,
-   mergeable, fully-approved, …).
-4. **Detects MRs merged since the last check** (by me, a teammate, or the
+3. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
-5. **Prints a "Merged, awaiting production deploy" table** — the merged MRs not
-   yet in production, with a per-MR deploy status (awaiting prod trigger, prod
-   deploying, prod deploy failed, pipeline building/failed). An MR drops off
-   this table — and out of tracking — once production has been shipped at or
-   after its merge commit: its own prod deploy succeeding, **or** any later
-   `main` pipeline shipping to prod (a newer commit carries the earlier ones
-   with it). See `latest_prod_shipped_pipeline_id`. This table is purely
-   informational and never sets `Action needed`.
-6. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**. This
+4. **Prints one table** — `Task | PR title | PR | Status`:
+   - **open MRs first**, Status = review state (draft, not-approved, need-rebase,
+     conflict, mergeable, fully-approved, …);
+   - **merged-but-not-yet-deployed MRs at the bottom**, Status = deploy state
+     (awaiting prod trigger, prod deploying, prod deploy failed, pipeline
+     building/failed). A merged MR drops off — and out of tracking — once
+     production has been shipped at or after its merge commit: its own prod
+     deploy succeeding, **or** any later `main` pipeline shipping to prod (a newer
+     commit carries the earlier ones with it). See
+     `latest_prod_shipped_pipeline_id`. These rows are purely informational and
+     never set `Action needed`.
+5. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**. This
    flag tracks **only open-PR work** — a fully-approved mergeable MR, a needed
    rebase, or conflicts. Deployment progress never flips it.
    - **Orange** — something needs me on an open PR.
    - **Green** — all clear.
 
 Long task names and PR titles are truncated (`TASK_MAX` / `TITLE_MAX`) so the
-tables keep a fixed width and never wrap in the terminal.
+table keeps a fixed width and never wraps in the terminal.
 
 ## State file
 
@@ -121,12 +121,12 @@ Safe to delete — the next run will recreate it with a fresh baseline.
 ## Notes & caveats
 
 - On the very first run the previous state is empty, so nothing merged is
-  detected — it just records a baseline and prints the tables.
+  detected — it just records a baseline and prints the table.
 - `project_path`/`iid` in `open_mrs` are what allow a later run to recognise a
   vanished MR as merged and start tracking its deployment. Entries written by
   older versions lack them; those MRs are silently skipped for deploy tracking.
 - Because the report is table-only, the watcher wakes on anything visible in the
-  tables — a Status change (approval-to-full, rebase needed, conflict, mergeable),
+  table — a Status change (approval-to-full, rebase needed, conflict, mergeable),
   a merge, a new/removed MR, deployment progress, or an `Action needed` flip. It
   no longer wakes on a bare new comment or a partial approval that doesn't move
   the Status label, since those aren't shown. `note_count`/`approvals` are still

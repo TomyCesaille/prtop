@@ -27,12 +27,13 @@ interpretation table in sync.
   (looped variant: `monitor-prs-looped.md`)
 - This Python engine: `monitor_prs.py`
 
-The report is **table-only**: an open-MRs table, a "Merged, awaiting production
-deploy" table, and a final `Action needed: yes/no` line — nothing else. There are
-no activity-delta alerts and no prose suggestion sections; the skill reads the
-tables' Status / Deploy columns directly. The deploy table is informational only;
-the skill relays it but never acts on it. If you change the Status labels or the
-columns, update the skill's interpretation table.
+The report is **one table** (`Task | PR title | PR | Status`) plus a final
+`Action needed: yes/no` line — nothing else. Open MRs come first with their review
+status; merged-but-not-yet-deployed MRs sit at the bottom with their deploy status
+in the same Status column. No activity-delta alerts, no prose suggestion sections;
+the skill reads the Status column directly. The merged rows are informational only;
+the skill relays them but never acts on them. If you change the Status labels or
+the columns, update the skill's interpretation table.
 
 ## Architecture
 
@@ -49,16 +50,16 @@ Single file, stdlib only. Sections in order:
    (ThreadPoolExecutor fan-out across MRs).
 5. **Track merges** — `track_vanished_mrs` resolves MRs that left the open list;
    a merged one gets a `deployments` entry pointing at its merge-commit main
-   pipeline (pure side effect, no output). `format_status_table` renders the
-   open-MRs table.
+   pipeline (pure side effect, no output). `open_mr_rows` builds the open-MR
+   rows for the table.
 6. **Deployments** — `check_deployments` classifies each tracked MR against a
    per-project **production frontier** (`latest_prod_shipped_pipeline_id`: the
    highest `main` pipeline whose prod deploy jobs succeeded). Any MR whose merge
    pipeline id is ≤ that frontier is in prod → dropped from tracking; the rest
-   become rows in the "Merged, awaiting production deploy" table with a status
-   from `pending_deploy_status`. Frontiers (per project) and per-MR evaluation
-   both fan out over a `ThreadPoolExecutor`. Purely informational — it never
-   contributes to `action_needed`.
+   are returned as rows (with a status from `pending_deploy_status`) that
+   `run_once` appends to the bottom of the same table. Frontiers (per project)
+   and per-MR evaluation both fan out over a `ThreadPoolExecutor`. Purely
+   informational — never contributes to `action_needed`.
 7. **iTerm tab colour** — OSC escape codes, emitted once at the very end.
 8. **`run_once` / `main`** — top-level flow and CLI; single check by
    default, `--loop [SECONDS]` for wall-clock-aligned repetition.
@@ -127,9 +128,10 @@ field; `check_deployments` pops it.
   non-fatal there). Never add prompts back in either mode.
 - **First run** records a baseline; `track_vanished_mrs` sees an empty previous
   set, so nothing is detected as merged on that run.
-- **Report is table-only.** Two tables + the `Action needed` line, nothing else.
-  Rebase-safety nuance (which projects reset approvals on push) now lives in the
-  skill, not here — don't reintroduce prose alert/suggestion sections.
+- **Report is one table + the `Action needed` line, nothing else.** Open MRs on
+  top, merged-awaiting-deploy rows at the bottom, all in one table. Rebase-safety
+  nuance (which projects reset approvals on push) now lives in the skill, not
+  here — don't reintroduce prose alert/suggestion sections or a second table.
 - **Production-frontier model**: an MR is judged deployed against a single
   per-project frontier, not just its own pipeline — so an MR carried to prod by
   a *later* commit is correctly treated as shipped and dropped, even if its own
