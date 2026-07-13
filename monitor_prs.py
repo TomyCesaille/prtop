@@ -58,12 +58,6 @@ DEPLOY_PROD_JOB_RE = re.compile(r"deploy.*prod|prod.*deploy", re.I)
 PRIMARY_PROD_DEPLOY_RE = re.compile(r"^deploy[_-]production$", re.I)
 TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}$")
 
-# Projects where approvals are known to survive a rebase.
-# Other projects (notably portal/*) reset approvals on push.
-SAFE_TO_REBASE_AFTER_APPROVAL = {
-    "acme/common/frontend",
-}
-
 
 # ---------- Subprocess helpers ----------
 
@@ -226,42 +220,11 @@ def strip_volatile(open_mrs: dict) -> dict:
     }
 
 
-# ---------- Diff ----------
+# ---------- Track merges into deployment tracking ----------
 
-def diff_open_mrs(current: dict, previous: dict) -> list[str]:
-    alerts: list[str] = []
-    for mr_id, cur in sorted(current.items()):
-        prev = previous.get(mr_id)
-        if prev is None:
-            continue
-        msgs: list[str] = []
-
-        delta = cur["note_count"] - prev.get("note_count", 0)
-        if delta > 0:
-            msgs.append(f"{delta} new comment{'s' if delta != 1 else ''}")
-
-        new_approvers = sorted(set(cur["approvals"]) - set(prev.get("approvals", [])))
-        if new_approvers:
-            msgs.append("approved by " + ", ".join(f"@{u}" for u in new_approvers))
-
-        if cur["fully_approved"] and not prev.get("fully_approved"):
-            msgs.append("fully approved")
-
-        if cur["merge_status"] == "need_rebase" and prev.get("merge_status") != "need_rebase":
-            msgs.append("needs rebase")
-
-        if cur["has_conflicts"] and not prev.get("has_conflicts"):
-            msgs.append("has conflicts")
-
-        if msgs:
-            alerts.append(f"- `{mr_id}` — " + ", ".join(msgs))
-    return alerts
-
-
-def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
-    """MRs that disappeared from the open list since last check: figure out
-    whether they were merged, and if so start tracking their main pipeline."""
-    alerts: list[str] = []
+def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
+    """MRs that dropped off the open list since last check: if one merged, start
+    tracking its main pipeline so it shows up in the awaiting-deploy table."""
     deployments = state.setdefault("deployments", {})
 
     for mr_id in sorted(previous):
@@ -271,18 +234,15 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
         project_path = prev.get("project_path")
         iid = prev.get("iid")
         if not project_path or not iid:
-            alerts.append(f"- `{mr_id}` — closed/merged.")
             continue
 
         encoded = quote(project_path, safe="")
         try:
             full = glab_api(f"projects/{encoded}/merge_requests/{iid}") or {}
         except GlabError:
-            alerts.append(f"- `{mr_id}` — closed/merged (could not fetch final state).")
             continue
 
         if full.get("state") != "merged":
-            alerts.append(f"- `{mr_id}` — {full.get('state', 'closed')} without merging.")
             continue
 
         sha = full.get("merge_commit_sha") or full.get("squash_commit_sha") or full.get("sha")
@@ -291,7 +251,6 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
             pipelines = glab_api(f"projects/{encoded}/pipelines?ref=main&per_page=5") or []
             pipeline = pipelines[0] if pipelines else None
         if pipeline is None:
-            alerts.append(f"- `{mr_id}` — merged, but no main pipeline found to track.")
             continue
 
         deployments[mr_id] = {
@@ -303,8 +262,6 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
             "pipeline_status": pipeline.get("status"),
             "pipeline_url": pipeline.get("web_url"),
         }
-        alerts.append(f"- `{mr_id}` — merged; now tracking main pipeline #{pipeline['id']}.")
-    return alerts
 
 
 # ---------- Rendering ----------
@@ -340,37 +297,6 @@ def format_status_table(open_mrs: dict) -> str:
         for mr_id, info in sorted(open_mrs.items())
     ]
     return _render_table(["Task", "PR title", "PR", "Status"], rows)
-
-
-# ---------- Action suggestions (info only — nothing is performed) ----------
-
-def merge_notes(open_mrs: dict) -> list[str]:
-    notes: list[str] = []
-    for mr_id, info in sorted(open_mrs.items()):
-        if info["fully_approved"] and info["merge_status"] == "mergeable":
-            url = info.get("web_url") or ""
-            notes.append(f"- `{mr_id}` — fully approved and mergeable; ready to merge. {url}".rstrip())
-    return notes
-
-
-def attention_notes(open_mrs: dict) -> list[str]:
-    notes: list[str] = []
-    for mr_id, info in sorted(open_mrs.items()):
-        if info["has_conflicts"]:
-            notes.append(f"- `{mr_id}` — has merge conflicts; manual resolution required.")
-        elif info["merge_status"] != "need_rebase":
-            continue
-        elif (
-            (info["fully_approved"] or info["approvals"])
-            and info["project_path"] not in SAFE_TO_REBASE_AFTER_APPROVAL
-        ):
-            notes.append(
-                f"- `{mr_id}` — needs rebase, but it has approvals and the project may "
-                f"reset approvals on push; confirm before rebasing."
-            )
-        else:
-            notes.append(f"- `{mr_id}` — needs rebase; safe to rebase automatically.")
-    return notes
 
 
 # ---------- Deployments ----------
@@ -545,34 +471,17 @@ def run_once() -> None:
 
     state = load_state()
     previous_mrs = state.get("open_mrs") or {}
-    first_run = not previous_mrs
 
     open_mrs = gather_all_mrs()
-    alerts = diff_open_mrs(open_mrs, previous_mrs)
-    alerts += track_vanished_mrs(open_mrs, previous_mrs, state)
+    # Populates deployment tracking for anything merged since last check; its
+    # result isn't printed — the tables are the whole report.
+    track_vanished_mrs(open_mrs, previous_mrs, state)
 
     state["open_mrs"] = strip_volatile(open_mrs)
     pending_deploys = check_deployments(state)
 
-    if first_run:
-        print("\nFirst run — baseline recorded. Watching:\n")
-        print(format_status_table(open_mrs))
-    elif alerts:
-        print("\n**PR Activity Alert:**")
-        print("\n".join(alerts))
-        print("\nWatching:\n")
-        print(format_status_table(open_mrs))
-    else:
-        print("\nNo new PR activity. Watching:\n")
-        print(format_status_table(open_mrs))
-
-    for header, msgs in [
-        ("Ready to merge", merge_notes(open_mrs)),
-        ("Needs attention", attention_notes(open_mrs)),
-    ]:
-        if msgs:
-            print(f"\n**{header}:**")
-            print("\n".join(msgs))
+    print()
+    print(format_status_table(open_mrs))
 
     if pending_deploys:
         print("\n**Merged, awaiting production deploy:**\n")

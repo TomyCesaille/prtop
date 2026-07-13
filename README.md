@@ -29,9 +29,9 @@ python3 monitor_prs.py --loop        # every 5 min
 python3 monitor_prs.py --loop 600    # custom interval in seconds
 
 # Passive watcher: re-run the check on an interval and exit as soon as the
-# report changes (activity alert, deployment progress, action flip) — designed
-# to be launched as a background task by an LLM session so it gets re-invoked
-# exactly when something needs attention. Prints a TIMEOUT line after the cap.
+# report changes (a status/approval change, a merge, deployment progress, an
+# action flip) — designed to be launched as a background task by an LLM session
+# so it gets re-invoked when something changes. Prints a TIMEOUT line after the cap.
 bash watch_prs.sh                 # defaults: 300s interval, 7200s cap
 bash watch_prs.sh 60 3600         # custom interval / cap
 ```
@@ -40,20 +40,24 @@ Exit code is 1 (with the error on stderr) if `glab` fails; the watcher also
 exits 1 when a check fails. In `--loop` mode `glab` errors are non-fatal —
 the cycle logs them to stderr and retries at the next tick.
 
-The watcher's first check only records a baseline (unless it already carries
-an activity alert) — run a one-shot check and deal with pending items before
-starting it.
+The watcher's first check only records a baseline — run a one-shot check and
+deal with pending items before starting it.
 
 `PR_MONITOR_STATE_FILE` overrides the state file path (both scripts honour
 it) — useful for testing against a scratch copy.
 
 ## What one run does
 
+The report is deliberately just **two tables plus an `Action needed` line** — no
+activity-delta alerts, no prose suggestion sections. The tables' Status / Deploy
+columns are the whole picture.
+
 1. **Lists open MRs** assigned to `jdoe` in the `acme` group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
    (calls run in parallel across MRs).
-3. **Diffs against the saved state** and prints what changed: new comments, new
-   approvers, fully-approved transitions, conflicts, rebase needed.
+3. **Prints the open-MRs table** — `Task | PR title | PR | Status`, where Status
+   carries an emoji + label (draft, not-approved, need-rebase, conflict,
+   mergeable, fully-approved, …).
 4. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
@@ -65,14 +69,9 @@ it) — useful for testing against a scratch copy.
    `main` pipeline shipping to prod (a newer commit carries the earlier ones
    with it). See `latest_prod_shipped_pipeline_id`. This table is purely
    informational and never sets `Action needed`.
-6. **Prints suggestion sections** for the caller to act on:
-   - **Ready to merge** — fully approved + mergeable MRs;
-   - **Needs attention** — conflicts, and rebases split into
-     safe-to-do-automatically vs confirm-first (projects that reset approvals
-     on push — everything outside `SAFE_TO_REBASE_AFTER_APPROVAL`).
-7. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**. This
-   flag tracks **only open-PR work** — ready to merge, needs rebase, or
-   conflicts. Deployment progress never flips it.
+6. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**. This
+   flag tracks **only open-PR work** — a fully-approved mergeable MR, a needed
+   rebase, or conflicts. Deployment progress never flips it.
    - **Orange** — something needs me on an open PR.
    - **Green** — all clear.
 
@@ -121,10 +120,16 @@ Safe to delete — the next run will recreate it with a fresh baseline.
 
 ## Notes & caveats
 
-- On the very first run nothing has been seen before, so no alerts fire — it
-  just records a baseline and prints the table.
+- On the very first run the previous state is empty, so nothing merged is
+  detected — it just records a baseline and prints the tables.
 - `project_path`/`iid` in `open_mrs` are what allow a later run to recognise a
   vanished MR as merged and start tracking its deployment. Entries written by
-  older versions lack them; those MRs are reported as plain "closed/merged".
+  older versions lack them; those MRs are silently skipped for deploy tracking.
+- Because the report is table-only, the watcher wakes on anything visible in the
+  tables — a Status change (approval-to-full, rebase needed, conflict, mergeable),
+  a merge, a new/removed MR, deployment progress, or an `Action needed` flip. It
+  no longer wakes on a bare new comment or a partial approval that doesn't move
+  the Status label, since those aren't shown. `note_count`/`approvals` are still
+  recorded in the state file for anything that wants finer-grained detection.
 - The script does **not** post Slack messages or open browsers; it just prints
   to stdout and colours the iTerm tab.

@@ -6,8 +6,8 @@
 #   interval: seconds between checks (default 300)
 #   cap:      exit with a TIMEOUT line after this many quiet seconds (default 7200)
 #
-# The first check records a baseline (unless it already carries an activity
-# alert); run a one-shot check and handle pending items before starting this.
+# The first check records a baseline; run a one-shot check and handle pending
+# items before starting this.
 #
 # Exit codes: 0 = activity/change detected or TIMEOUT; 1 = monitor script error.
 
@@ -31,11 +31,6 @@ while :; do
     printf '%s\n' "$out"
     echo "[watch] monitor_prs.py failed (exit $rc)"
     exit 1
-  fi
-
-  if printf '%s\n' "$out" | grep -q 'PR Activity Alert'; then
-    printf '%s\n' "$out"
-    exit 0
   fi
 
   norm=$(printf '%s\n' "$out" | normalize)
