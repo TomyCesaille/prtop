@@ -49,9 +49,13 @@ PIPELINE_INFLIGHT = {
 # awaiting, not deploying.
 PROD_DEPLOYING = {"running", "pending", "preparing", "scheduled", "waiting_for_resource"}
 
-# Matches the production *deploy* job (deploy_production, deploy-production,
+# Matches any production *deploy* job (deploy_production, deploy-production,
 # deploy_production_heavy_duty, …) while excluding prod test/migrate/route jobs.
 DEPLOY_PROD_JOB_RE = re.compile(r"deploy.*prod|prod.*deploy", re.I)
+# The canonical prod deploy job, without the auxiliary-service suffixes
+# (_heavy_duty, _certificates_exporter, …) that are deployed separately and
+# often left un-triggered. Its success is what marks "shipped to production".
+PRIMARY_PROD_DEPLOY_RE = re.compile(r"^deploy[_-]production$", re.I)
 TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}$")
 
 # Projects where approvals are known to survive a rebase.
@@ -384,13 +388,27 @@ def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries
     return None
 
 
-def prod_deploy_jobs(encoded_project: str, pipeline_id: int) -> list[dict]:
-    jobs = glab_api(f"projects/{encoded_project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
-    return [j for j in jobs if DEPLOY_PROD_JOB_RE.search(j.get("name", ""))]
+def pipeline_jobs(encoded_project: str, pipeline_id: int) -> list[dict]:
+    return glab_api(f"projects/{encoded_project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
+
+
+def primary_prod_jobs(jobs: list[dict]) -> list[dict]:
+    """The canonical prod deploy job(s) — `deploy_production`/`deploy-production`
+    if present, else every prod deploy job. Auxiliary suffixed variants
+    (`_heavy_duty`, `_certificates_exporter`, …) are excluded so a left-manual
+    side service doesn't mask that the app itself shipped."""
+    prod = [j for j in jobs if DEPLOY_PROD_JOB_RE.search(j.get("name", ""))]
+    primary = [j for j in prod if PRIMARY_PROD_DEPLOY_RE.match(j.get("name", ""))]
+    return primary or prod
+
+
+def shipped_prod(jobs: list[dict]) -> bool:
+    statuses = {j.get("status") for j in primary_prod_jobs(jobs)}
+    return "success" in statuses and statuses <= {"success", "skipped"}
 
 
 def latest_prod_shipped_pipeline_id(encoded_project: str) -> int | None:
-    """Highest `main` pipeline id whose production deploy has fully succeeded.
+    """Highest `main` pipeline id whose primary production deploy succeeded.
 
     Because `main` is linear, any commit merged at or before that pipeline is
     live in production — a later commit shipping carries the earlier ones with
@@ -398,20 +416,19 @@ def latest_prod_shipped_pipeline_id(encoded_project: str) -> int | None:
     has no prod deploy job at all)."""
     pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=20") or []
     for p in sorted(pipelines, key=lambda x: x["id"], reverse=True):
-        statuses = {j.get("status") for j in prod_deploy_jobs(encoded_project, p["id"])}
-        if "success" in statuses and statuses <= {"success", "skipped"}:
+        if shipped_prod(pipeline_jobs(encoded_project, p["id"])):
             return p["id"]
     return None
 
 
-def pending_deploy_status(encoded_project: str, pipeline_id: int, pipeline_status: str, dep: dict) -> str:
+def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> str:
     """Human status for an MR that is merged but not yet in production."""
     if pipeline_status in PIPELINE_INFLIGHT:
         return f"⏳ pipeline {pipeline_status}"
     if pipeline_status == "failed":
         return "❌ pipeline failed"
 
-    prod = prod_deploy_jobs(encoded_project, pipeline_id)
+    prod = primary_prod_jobs(jobs)
     if not prod:
         return f"🔹 {pipeline_status}, no prod job"
     dep["prod_job_id"] = prod[0]["id"]
@@ -437,7 +454,11 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
         pipeline = glab_api(f"projects/{project}/pipelines/{pipeline_id}") or {}
         status = pipeline.get("status")
         dep["pipeline_status"] = status
-        deploy_status = pending_deploy_status(project, pipeline_id, status, dep)
+        jobs = pipeline_jobs(project, pipeline_id)
+        # Safety net for a prod deploy that fell outside the frontier's window.
+        if shipped_prod(jobs):
+            return mr_id, True, None
+        deploy_status = pending_deploy_status(status, jobs, dep)
     except GlabError as e:
         deploy_status = f"⚠️ check failed: {e}"
 
