@@ -57,22 +57,27 @@ it) — useful for testing against a scratch copy.
 4. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
-5. **Reports tracked deployments** — staging pipeline status, then the manual
-   prod job:
-   - prod job succeeded (or a *later* main pipeline already shipped prod) →
-     reports success and stops tracking;
-   - prod job failed or staging pipeline failed → alert;
-   - prod job still `manual` → reports that it awaits a manual trigger, with
-     the job id and URL.
+5. **Prints a "Merged, awaiting production deploy" table** — the merged MRs not
+   yet in production, with a per-MR deploy status (awaiting prod trigger, prod
+   deploying, prod deploy failed, pipeline building/failed). An MR drops off
+   this table — and out of tracking — once production has been shipped at or
+   after its merge commit: its own prod deploy succeeding, **or** any later
+   `main` pipeline shipping to prod (a newer commit carries the earlier ones
+   with it). See `latest_prod_shipped_pipeline_id`. This table is purely
+   informational and never sets `Action needed`.
 6. **Prints suggestion sections** for the caller to act on:
    - **Ready to merge** — fully approved + mergeable MRs;
    - **Needs attention** — conflicts, and rebases split into
      safe-to-do-automatically vs confirm-first (projects that reset approvals
      on push — everything outside `SAFE_TO_REBASE_AFTER_APPROVAL`).
-7. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**:
-   - **Orange** — something needs me (ready to merge, rebase/conflicts,
-     prod trigger awaited, failed pipeline).
+7. **Prints `Action needed: yes/no`** and **sets the iTerm2 tab colour**. This
+   flag tracks **only open-PR work** — ready to merge, needs rebase, or
+   conflicts. Deployment progress never flips it.
+   - **Orange** — something needs me on an open PR.
    - **Green** — all clear.
+
+Long task names and PR titles are truncated (`TASK_MAX` / `TITLE_MAX`) so the
+tables keep a fixed width and never wrap in the terminal.
 
 ## State file
 
@@ -99,6 +104,7 @@ it) — useful for testing against a scratch copy.
   "deployments": {
     "portal-frontend!47": {
       "title": "...",
+      "task_name": "...",
       "project": "acme%2Fportal%2Fportal-frontend",
       "project_path": "acme/portal/portal-frontend",
       "pipeline_id": 12345,

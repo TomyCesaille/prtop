@@ -28,8 +28,9 @@ interpretation table in sync.
 - This Python engine: `monitor_prs.py`
 
 The skill maps the script's suggestion strings ("ready to merge", "safe to
-rebase automatically", "awaits a manual trigger", …) to actions — if you
-reword them here, update the skill's table.
+rebase automatically", …) to actions — if you reword them here, update the
+skill's table. The "Merged, awaiting production deploy" table is informational
+only; the skill relays it but never acts on it.
 
 ## Architecture
 
@@ -50,9 +51,14 @@ Single file, stdlib only. Sections in order:
    plain alert); `format_status_table` renders the markdown summary.
 6. **Suggestions** — `merge_notes` (fully approved + mergeable) and
    `attention_notes` (conflicts, safe vs confirm-first rebases). Info only.
-7. **Deployments** — `check_deployments` re-derives each tracked deployment's
-   status per run (no stage machine): staging pipeline → prod job →
-   success/failure/awaiting-manual-trigger.
+7. **Deployments** — `check_deployments` classifies each tracked MR against a
+   per-project **production frontier** (`latest_prod_shipped_pipeline_id`: the
+   highest `main` pipeline whose prod deploy jobs succeeded). Any MR whose merge
+   pipeline id is ≤ that frontier is in prod → dropped from tracking; the rest
+   become rows in the "Merged, awaiting production deploy" table with a status
+   from `pending_deploy_status`. Frontiers (per project) and per-MR evaluation
+   both fan out over a `ThreadPoolExecutor`. Purely informational — it never
+   contributes to `action_needed`.
 8. **iTerm tab colour** — OSC escape codes, emitted once at the very end.
 9. **`run_once` / `main`** — top-level flow and CLI; single check by
    default, `--loop [SECONDS]` for wall-clock-aligned repetition.
@@ -67,9 +73,9 @@ Single file, stdlib only. Sections in order:
                                         approvals[], fully_approved, has_conflicts,
                                         merge_status, project_path, iid, web_url,
                                         last_checked } },
-  "deployments": { "<project>!<iid>": { title, project (url-encoded), project_path,
-                                        pipeline_id, pipeline_status, pipeline_url,
-                                        prod_job_id? } },
+  "deployments": { "<project>!<iid>": { title, task_name, project (url-encoded),
+                                        project_path, pipeline_id, pipeline_status,
+                                        pipeline_url, prod_job_id? } },
   "last_checked": "<iso>"
 }
 ```
@@ -90,9 +96,14 @@ field; `check_deployments` pops it.
 - The group endpoint
   `groups/acme/merge_requests?assignee_username=…&state=opened&per_page=100`
   returns subgroup MRs too. `references.full` gives `"<full-path>!<iid>"`.
-- Manual production jobs are recognised by name match `prod|production`
-  (case-insensitive). Don't rely on `stage == "deploy"` alone — staging jobs
-  also live there.
+- The production *deploy* job is recognised by name match
+  `deploy.*prod|prod.*deploy` (`DEPLOY_PROD_JOB_RE`, case-insensitive). This
+  deliberately excludes prod *test*/*migrate*/*route-traffic* jobs (e.g.
+  `test_scenarios_production`, `migrate_production`, `route_traffic_production`)
+  that a looser `prod|production` match would wrongly pick up. Job names vary by
+  repo: `deploy-production`, `deploy_production`, `deploy_production_heavy_duty`,
+  … — the regex covers all. A pipeline counts as having shipped prod when its
+  prod-deploy jobs are all `success`/`skipped` with at least one `success`.
 - Right after a merge, the pipeline on `main` may not exist yet.
   `find_main_pipeline_for_sha` polls a few times before giving up, then
   `track_vanished_mrs` falls back to the most recent main pipeline.
@@ -113,12 +124,15 @@ field; `check_deployments` pops it.
 - **Rebase safety info**: an MR with approvals in a project outside
   `SAFE_TO_REBASE_AFTER_APPROVAL` is reported as confirm-first — some
   projects (`portal/*`) reset approvals on push.
-- **Newer-pipeline-shipped-prod check**: before reporting "awaits a manual
-  trigger", scan later main pipelines for an already-successful prod job. If
-  found, report deployed and drop from `deployments`.
-- **Every orange trigger must appear in the report.** `action_needed` and the
-  printed sections are computed from the same conditions; if you add a
-  condition to one, add it to the other.
+- **Production-frontier model**: an MR is judged deployed against a single
+  per-project frontier, not just its own pipeline — so an MR carried to prod by
+  a *later* commit is correctly treated as shipped and dropped, even if its own
+  prod job was never triggered. Compare merge-pipeline id ≤ frontier id (`main`
+  is linear, so pipeline id order == commit order).
+- **`action_needed` covers open-PR work only** — ready to merge, needs rebase,
+  or conflicts. Deployment status must never flip it. `action_needed` and the
+  printed suggestion sections are computed from the same conditions; if you add
+  a condition to one, add it to the other.
 - **iTerm colour at the very end**, exactly once, after the plain
   `Action needed: yes/no` line.
 

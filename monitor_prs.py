@@ -44,7 +44,14 @@ PIPELINE_INFLIGHT = {
     "scheduled", "waiting_for_resource",
 }
 
-PROD_JOB_NAME_RE = re.compile(r"prod|production", re.I)
+# A prod deploy *job* is only actively shipping in these states. `created` is
+# excluded: it means the job is blocked behind an untriggered gate, i.e. still
+# awaiting, not deploying.
+PROD_DEPLOYING = {"running", "pending", "preparing", "scheduled", "waiting_for_resource"}
+
+# Matches the production *deploy* job (deploy_production, deploy-production,
+# deploy_production_heavy_duty, …) while excluding prod test/migrate/route jobs.
+DEPLOY_PROD_JOB_RE = re.compile(r"deploy.*prod|prod.*deploy", re.I)
 TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}$")
 
 # Projects where approvals are known to survive a rebase.
@@ -285,6 +292,7 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
 
         deployments[mr_id] = {
             "title": prev.get("title", ""),
+            "task_name": prev.get("task_name", ""),
             "project": encoded,
             "project_path": project_path,
             "pipeline_id": pipeline["id"],
@@ -297,7 +305,8 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> list[str]:
 
 # ---------- Rendering ----------
 
-TITLE_MAX = 60
+TASK_MAX = 40
+TITLE_MAX = 50
 
 
 def _truncate(text: str, width: int) -> str:
@@ -319,7 +328,7 @@ def format_status_table(open_mrs: dict) -> str:
         return "_(no open MRs assigned)_"
     rows = [
         [
-            info.get("task_name") or "—",
+            _truncate(info.get("task_name") or "—", TASK_MAX),
             _truncate(info["title"], TITLE_MAX),
             f"`{mr_id}`",
             fmt_status(info["merge_status"], info["fully_approved"]),
@@ -362,13 +371,6 @@ def attention_notes(open_mrs: dict) -> list[str]:
 
 # ---------- Deployments ----------
 
-def find_prod_job(jobs: list[dict]) -> dict | None:
-    for j in jobs:
-        if PROD_JOB_NAME_RE.search(j.get("name", "")):
-            return j
-    return None
-
-
 def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries: int = 3) -> dict | None:
     if not sha:
         return None
@@ -382,91 +384,102 @@ def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries
     return None
 
 
-def newer_main_pipeline_shipped_prod(encoded_project: str, after_pipeline_id: int) -> bool:
-    pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=10") or []
-    for p in pipelines:
-        if p["id"] <= after_pipeline_id:
-            continue
-        jobs = glab_api(f"projects/{encoded_project}/pipelines/{p['id']}/jobs?per_page=100") or []
-        prod = find_prod_job(jobs)
-        if prod and prod.get("status") == "success":
-            return True
-    return False
+def prod_deploy_jobs(encoded_project: str, pipeline_id: int) -> list[dict]:
+    jobs = glab_api(f"projects/{encoded_project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
+    return [j for j in jobs if DEPLOY_PROD_JOB_RE.search(j.get("name", ""))]
 
 
-def check_deployments(state: dict) -> tuple[list[str], bool]:
-    """Returns (messages, action_needed)."""
+def latest_prod_shipped_pipeline_id(encoded_project: str) -> int | None:
+    """Highest `main` pipeline id whose production deploy has fully succeeded.
+
+    Because `main` is linear, any commit merged at or before that pipeline is
+    live in production — a later commit shipping carries the earlier ones with
+    it. Returns None when no recent pipeline has shipped prod (or the project
+    has no prod deploy job at all)."""
+    pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=20") or []
+    for p in sorted(pipelines, key=lambda x: x["id"], reverse=True):
+        statuses = {j.get("status") for j in prod_deploy_jobs(encoded_project, p["id"])}
+        if "success" in statuses and statuses <= {"success", "skipped"}:
+            return p["id"]
+    return None
+
+
+def pending_deploy_status(encoded_project: str, pipeline_id: int, pipeline_status: str, dep: dict) -> str:
+    """Human status for an MR that is merged but not yet in production."""
+    if pipeline_status in PIPELINE_INFLIGHT:
+        return f"⏳ pipeline {pipeline_status}"
+    if pipeline_status == "failed":
+        return "❌ pipeline failed"
+
+    prod = prod_deploy_jobs(encoded_project, pipeline_id)
+    if not prod:
+        return f"🔹 {pipeline_status}, no prod job"
+    dep["prod_job_id"] = prod[0]["id"]
+    statuses = {j.get("status") for j in prod}
+    if "failed" in statuses:
+        return "❌ prod deploy failed"
+    if statuses & PROD_DEPLOYING:
+        return "🚀 prod deploying"
+    if statuses & {"manual", "created", "skipped"}:
+        return "🕹️ awaiting prod trigger"
+    return "🔹 prod " + ", ".join(sorted(s for s in statuses if s))
+
+
+def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool, list[str] | None]:
+    """Returns (mr_id, is_in_production, table_row_or_None)."""
+    mr_id, dep, frontier = item
+    dep.pop("stage", None)  # legacy field from the interactive era
+    project = dep["project"]
+    pipeline_id = dep["pipeline_id"]
+    try:
+        if frontier is not None and pipeline_id <= frontier:
+            return mr_id, True, None
+        pipeline = glab_api(f"projects/{project}/pipelines/{pipeline_id}") or {}
+        status = pipeline.get("status")
+        dep["pipeline_status"] = status
+        deploy_status = pending_deploy_status(project, pipeline_id, status, dep)
+    except GlabError as e:
+        deploy_status = f"⚠️ check failed: {e}"
+
+    row = [
+        _truncate(dep.get("task_name") or "—", TASK_MAX),
+        _truncate(dep.get("title", ""), TITLE_MAX),
+        f"`{mr_id}`",
+        deploy_status,
+    ]
+    return mr_id, False, row
+
+
+def check_deployments(state: dict) -> list[list[str]]:
+    """Refresh deployment tracking and return table rows for MRs that are
+    merged but not yet in production, sorted by MR id.
+
+    Deployed MRs are dropped from tracking. Production is judged per project
+    against a single frontier (see `latest_prod_shipped_pipeline_id`), so an MR
+    already carried to prod by a later commit is correctly treated as shipped.
+    """
     deployments = state.get("deployments") or {}
-    msgs: list[str] = []
-    action_needed = False
+    if not deployments:
+        return []
+
+    projects = sorted({dep["project"] for dep in deployments.values()})
+    with ThreadPoolExecutor(max_workers=min(8, len(projects))) as pool:
+        frontiers = dict(zip(projects, pool.map(latest_prod_shipped_pipeline_id, projects)))
+
+    items = [(mr_id, dep, frontiers.get(dep["project"])) for mr_id, dep in deployments.items()]
+    pending: list[tuple[str, list[str]]] = []
     to_remove: list[str] = []
-
-    for mr_id, dep in deployments.items():
-        try:
-            project = dep["project"]
-            pipeline_id = dep["pipeline_id"]
-            dep.pop("stage", None)  # legacy field from the interactive era
-
-            pipeline = glab_api(f"projects/{project}/pipelines/{pipeline_id}") or {}
-            status = pipeline.get("status")
-            dep["pipeline_status"] = status
-
-            if status in PIPELINE_INFLIGHT:
-                msgs.append(f"- `{mr_id}` — staging pipeline {status}.")
-                continue
-            if status == "failed":
-                msgs.append(
-                    f"- `{mr_id}` — staging pipeline **failed**! {pipeline.get('web_url', '')}"
-                )
-                action_needed = True
-                continue
-            if status != "success":
-                msgs.append(f"- `{mr_id}` — staging pipeline status: {status} (unhandled).")
-                continue
-
-            jobs = glab_api(f"projects/{project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
-            prod = find_prod_job(jobs)
-            if prod is None:
-                msgs.append(f"- `{mr_id}` — deployed (staging only, no prod job).")
+    with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
+        for mr_id, in_prod, row in pool.map(_evaluate_deployment, items):
+            if in_prod:
                 to_remove.append(mr_id)
-                continue
-
-            dep["prod_job_id"] = prod["id"]
-            pstatus = prod.get("status")
-
-            if pstatus == "success":
-                msgs.append(f"- `{mr_id}` — deployed to production successfully.")
-                to_remove.append(mr_id)
-            elif pstatus == "failed":
-                msgs.append(
-                    f"- `{mr_id}` — production deployment **failed**! {prod.get('web_url', '')}"
-                )
-                action_needed = True
-            elif pstatus in PIPELINE_INFLIGHT:
-                msgs.append(f"- `{mr_id}` — production deployment {pstatus}.")
-            elif pstatus in ("manual", "created", "skipped"):
-                if newer_main_pipeline_shipped_prod(project, pipeline_id):
-                    msgs.append(
-                        f"- `{mr_id}` — already shipped to production via a later main pipeline."
-                    )
-                    to_remove.append(mr_id)
-                else:
-                    msgs.append(
-                        f"- `{mr_id}` — staging is healthy; production job #{prod['id']} "
-                        f"awaits a manual trigger. {prod.get('web_url', '')}"
-                    )
-                    action_needed = True
-            else:
-                msgs.append(f"- `{mr_id}` — prod job status: {pstatus} (unhandled).")
-
-        except GlabError as e:
-            msgs.append(f"- `{mr_id}` — deployment check failed: {e}")
-            action_needed = True
+            elif row is not None:
+                pending.append((mr_id, row))
 
     for mr_id in to_remove:
         deployments.pop(mr_id, None)
 
-    return msgs, action_needed
+    return [row for _, row in sorted(pending)]
 
 
 # ---------- Wall-clock alignment ----------
@@ -515,7 +528,7 @@ def run_once() -> None:
     alerts += track_vanished_mrs(open_mrs, previous_mrs, state)
 
     state["open_mrs"] = strip_volatile(open_mrs)
-    deploy_msgs, deploy_action_needed = check_deployments(state)
+    pending_deploys = check_deployments(state)
 
     if first_run:
         print("\nFirst run — baseline recorded. Watching:\n")
@@ -532,17 +545,21 @@ def run_once() -> None:
     for header, msgs in [
         ("Ready to merge", merge_notes(open_mrs)),
         ("Needs attention", attention_notes(open_mrs)),
-        ("Deployments", deploy_msgs),
     ]:
         if msgs:
             print(f"\n**{header}:**")
             print("\n".join(msgs))
 
-    # Reflects persistent state, not just transitions: an MR that has been
-    # fully-approved-and-mergeable for several cycles is still on me to merge.
+    if pending_deploys:
+        print("\n**Merged, awaiting production deploy:**\n")
+        print(_render_table(["Task", "PR title", "PR", "Deploy status"], pending_deploys))
+
+    # Action needed tracks only what's on me for an open PR — merge, rebase, or
+    # resolve conflicts. Deployment progress is reported above but never flips
+    # this flag. Reflects persistent state, not just transitions: an MR that has
+    # been fully-approved-and-mergeable for several cycles is still on me.
     action_needed = (
-        deploy_action_needed
-        or any(info["has_conflicts"] for info in open_mrs.values())
+        any(info["has_conflicts"] for info in open_mrs.values())
         or any(info["merge_status"] == "need_rebase" for info in open_mrs.values())
         or any(
             info["fully_approved"] and info["merge_status"] == "mergeable"
