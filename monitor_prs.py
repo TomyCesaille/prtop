@@ -484,15 +484,18 @@ def check_deployments(state: dict) -> list[list[str]]:
 
 # ---------- Wall-clock alignment ----------
 
-def sleep_until_next_tick(interval: int) -> None:
-    """Sleep until the next multiple of `interval` seconds past the local hour.
+def next_tick_time(interval: int) -> float:
+    """Epoch time of the next multiple of `interval` seconds past the local hour.
 
     With interval=300, ticks land at :00, :05, :10, … local time (in any
     timezone offset by a whole number of minutes from UTC).
     """
-    now = time.time()
-    next_tick = (int(now) // interval + 1) * interval
-    delay = next_tick - now
+    return (int(time.time()) // interval + 1) * interval
+
+
+def sleep_until_next_tick(interval: int) -> None:
+    next_tick = next_tick_time(interval)
+    delay = next_tick - time.time()
     next_dt = datetime.fromtimestamp(next_tick)
     print(
         f"\nSleeping {delay:.0f}s until next tick at {next_dt:%H:%M:%S}…",
@@ -594,6 +597,11 @@ def main() -> int:
 
     print(f"Looping every {args.loop}s, aligned to wall-clock ticks. Ctrl+C to stop.")
     try:
+        # Kick off with an immediate check — unless the next aligned tick is
+        # under 2s away, in which case just wait for it rather than running
+        # twice back-to-back.
+        if next_tick_time(args.loop) - time.time() < 2:
+            sleep_until_next_tick(args.loop)
         while True:
             try:
                 run_once()
