@@ -274,14 +274,16 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def _render_table(headers: list[str], rows: list[list[str]]) -> str:
-    widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headers)]
+def _render_table(headers: list[str], rows: list[list[str] | None]) -> str:
+    """`None` in `rows` renders as a horizontal rule, separating row groups."""
+    body = [r for r in rows if r is not None]
+    widths = [max([len(h)] + [len(r[i]) for r in body]) for i, h in enumerate(headers)]
 
     def line(cells: list[str]) -> str:
         return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths)) + " |"
 
     sep = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
-    return "\n".join([line(headers), sep, *(line(r) for r in rows)])
+    return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
 def open_mr_rows(open_mrs: dict) -> list[list[str]]:
@@ -475,10 +477,16 @@ def run_once() -> None:
     track_vanished_mrs(open_mrs, previous_mrs, state)
 
     state["open_mrs"] = strip_volatile(open_mrs)
-    # Merged-but-not-yet-deployed MRs go at the bottom of the same table; their
-    # deploy status (🕹️ awaiting prod trigger, 🚀 prod deploying, …) sits in the
-    # Status column right next to the open MRs' review status.
-    rows = open_mr_rows(open_mrs) + check_deployments(state)
+    open_rows = open_mr_rows(open_mrs)
+    deploy_rows = check_deployments(state)
+    # Open MRs on top, merged-but-not-yet-deployed at the bottom (deploy status
+    # in the same Status column), with a separator rule between the two groups
+    # when both are present.
+    rows: list[list[str] | None] = list(open_rows)
+    if deploy_rows:
+        if open_rows:
+            rows.append(None)
+        rows.extend(deploy_rows)
 
     print()
     if rows:

@@ -58,7 +58,8 @@ the whole picture.
 3. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
-4. **Prints one table** — `Task | PR title | PR | Status`:
+4. **Prints one table** — `Task | PR title | PR | Status`, the two groups split
+   by a separator rule when both are present:
    - **open MRs first**, Status = review state (draft, not-approved, need-rebase,
      conflict, mergeable, fully-approved, …);
    - **merged-but-not-yet-deployed MRs at the bottom**, Status = deploy state

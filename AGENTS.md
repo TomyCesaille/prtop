@@ -129,9 +129,11 @@ field; `check_deployments` pops it.
 - **First run** records a baseline; `track_vanished_mrs` sees an empty previous
   set, so nothing is detected as merged on that run.
 - **Report is one table + the `Action needed` line, nothing else.** Open MRs on
-  top, merged-awaiting-deploy rows at the bottom, all in one table. Rebase-safety
-  nuance (which projects reset approvals on push) now lives in the skill, not
-  here — don't reintroduce prose alert/suggestion sections or a second table.
+  top, merged-awaiting-deploy rows at the bottom, split by a separator rule (a
+  `None` entry in the rows list, which `_render_table` renders as a horizontal
+  rule). Rebase-safety nuance (which projects reset approvals on push) now lives
+  in the skill, not here — don't reintroduce prose alert/suggestion sections or a
+  second table.
 - **Production-frontier model**: an MR is judged deployed against a single
   per-project frontier, not just its own pipeline — so an MR carried to prod by
   a *later* commit is correctly treated as shipped and dropped, even if its own
