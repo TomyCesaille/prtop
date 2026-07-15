@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -270,6 +271,13 @@ TASK_MAX = 40
 TITLE_MAX = 50
 
 
+def _display_width(text: str) -> int:
+    """Terminal cell width, counting East-Asian-wide chars (incl. emoji) as 2 so
+    the emoji-bearing Status column stays aligned. `str.ljust` can't — it counts
+    a single-codepoint emoji as 1 while the terminal renders it 2 cells wide."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
+
 def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
@@ -277,10 +285,14 @@ def _truncate(text: str, width: int) -> str:
 def _render_table(headers: list[str], rows: list[list[str] | None]) -> str:
     """`None` in `rows` renders as a horizontal rule, separating row groups."""
     body = [r for r in rows if r is not None]
-    widths = [max([len(h)] + [len(r[i]) for r in body]) for i, h in enumerate(headers)]
+    widths = [max([_display_width(h)] + [_display_width(r[i]) for r in body])
+              for i, h in enumerate(headers)]
+
+    def pad(cell: str, w: int) -> str:
+        return cell + " " * (w - _display_width(cell))
 
     def line(cells: list[str]) -> str:
-        return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths)) + " |"
+        return "| " + " | ".join(pad(c, w) for c, w in zip(cells, widths)) + " |"
 
     sep = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])

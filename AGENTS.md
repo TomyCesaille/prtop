@@ -145,6 +145,9 @@ field; `check_deployments` pops it.
   a needed rebase, or conflicts. Deployment status must never flip it. It is
   never printed; it exists solely to pick the tab colour.
 - **iTerm colour at the very end**, exactly once, after the table.
+- **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A
+  single-codepoint emoji in the Status column (👀, 🚀, …) is 1 code point but 2
+  terminal cells; padding by `len` under-counts it and skews the right border.
 
 ## Testing
 
