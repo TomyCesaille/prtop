@@ -27,10 +27,10 @@ interpretation table in sync.
   (looped variant: `monitor-prs-looped.md`)
 - This Python engine: `monitor_prs.py`
 
-The report is **one table** (`Task | PR title | PR | Status`) plus a final
-`Action needed: yes/no` line — nothing else. Open MRs come first with their review
-status; merged-but-not-yet-deployed MRs sit at the bottom with their deploy status
-in the same Status column. No activity-delta alerts, no prose suggestion sections;
+The report is **one table** (`Task | PR title | PR | Status`) — nothing else, no
+status line. Open MRs come first with their review status; merged-but-not-yet-
+deployed MRs sit at the bottom with their deploy status in the same Status column.
+No activity-delta alerts, no prose suggestion sections;
 the skill reads the Status column directly. The merged rows are informational only;
 the skill relays them but never acts on them. If you change the Status labels or
 the columns, update the skill's interpretation table.
@@ -60,9 +60,11 @@ Single file, stdlib only. Sections in order:
    `run_once` appends to the bottom of the same table. Frontiers (per project)
    and per-MR evaluation both fan out over a `ThreadPoolExecutor`. Purely
    informational — never contributes to `action_needed`.
-7. **iTerm tab colour** — OSC escape codes, emitted once at the very end.
-8. **`run_once` / `main`** — top-level flow and CLI; single check by
-   default, `--loop [SECONDS]` for wall-clock-aligned repetition.
+7. **iTerm tab colour** — OSC escape codes, emitted once at the very end; the
+   only signal `action_needed` drives (it is not printed).
+8. **`run_once` / `main`** — top-level flow and CLI; single check by default,
+   `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
+   only chrome is one `next tick @ <date HH:MM>` line before each sleep.
 
 ## State schema
 
@@ -128,21 +130,21 @@ field; `check_deployments` pops it.
   non-fatal there). Never add prompts back in either mode.
 - **First run** records a baseline; `track_vanished_mrs` sees an empty previous
   set, so nothing is detected as merged on that run.
-- **Report is one table + the `Action needed` line, nothing else.** Open MRs on
-  top, merged-awaiting-deploy rows at the bottom, split by a separator rule (a
-  `None` entry in the rows list, which `_render_table` renders as a horizontal
-  rule). Rebase-safety nuance (which projects reset approvals on push) now lives
-  in the skill, not here — don't reintroduce prose alert/suggestion sections or a
-  second table.
+- **Report is one table, nothing else** (no status line). Open MRs on top,
+  merged-awaiting-deploy rows at the bottom, split by a separator rule (a `None`
+  entry in the rows list, which `_render_table` renders as a horizontal rule).
+  Rebase-safety nuance (which projects reset approvals on push) now lives in the
+  skill, not here — don't reintroduce prose alert/suggestion sections or a second
+  table.
 - **Production-frontier model**: an MR is judged deployed against a single
   per-project frontier, not just its own pipeline — so an MR carried to prod by
   a *later* commit is correctly treated as shipped and dropped, even if its own
   prod job was never triggered. Compare merge-pipeline id ≤ frontier id (`main`
   is linear, so pipeline id order == commit order).
 - **`action_needed` covers open-PR work only** — a fully-approved mergeable MR,
-  a needed rebase, or conflicts. Deployment status must never flip it.
-- **iTerm colour at the very end**, exactly once, after the plain
-  `Action needed: yes/no` line.
+  a needed rebase, or conflicts. Deployment status must never flip it. It is
+  never printed; it exists solely to pick the tab colour.
+- **iTerm colour at the very end**, exactly once, after the table.
 
 ## Testing
 

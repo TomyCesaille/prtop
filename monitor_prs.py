@@ -441,13 +441,9 @@ def next_tick_time(interval: int) -> float:
 
 def sleep_until_next_tick(interval: int) -> None:
     next_tick = next_tick_time(interval)
-    delay = next_tick - time.time()
     next_dt = datetime.fromtimestamp(next_tick)
-    print(
-        f"\nSleeping {delay:.0f}s until next tick at {next_dt:%H:%M:%S}…",
-        flush=True,
-    )
-    time.sleep(delay)
+    print(f"\nnext tick @ {next_dt:%Y-%m-%d %H:%M}", flush=True)
+    time.sleep(next_tick - time.time())
 
 
 # ---------- iTerm tab color ----------
@@ -465,9 +461,6 @@ def set_iterm_tab_color(action_needed: bool) -> None:
 # ---------- Main run ----------
 
 def run_once() -> None:
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n=== monitor-prs @ {ts} ===", flush=True)
-
     state = load_state()
     previous_mrs = state.get("open_mrs") or {}
 
@@ -508,7 +501,6 @@ def run_once() -> None:
     )
 
     save_state(state)
-    print(f"\nAction needed: {'yes' if action_needed else 'no'}")
     set_iterm_tab_color(action_needed)
 
 
