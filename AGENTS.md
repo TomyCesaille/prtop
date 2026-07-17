@@ -144,6 +144,10 @@ field; `check_deployments` pops it.
 - **`action_needed` covers open-PR work only** — a fully-approved mergeable MR,
   a needed rebase, or conflicts. Deployment status must never flip it. It is
   never printed; it exists solely to pick the tab colour.
+- **`🕹️ awaiting prod trigger` is a markdown link** to the project's
+  `/-/commits/main?ref_type=HEADS` page (built from the deployment entry's
+  `project_path`) — that page is where the manual prod job gets triggered from.
+  Keep the label text inside the link unchanged; the skill matches on it.
 - **iTerm colour at the very end**, exactly once, after the table.
 - **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A
   single-codepoint emoji in the Status column (👀, 🚀, …) is 1 code point but 2

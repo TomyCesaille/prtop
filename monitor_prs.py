@@ -375,7 +375,8 @@ def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> 
     if statuses & PROD_DEPLOYING:
         return "🚀 prod deploying"
     if statuses & {"manual", "created", "skipped"}:
-        return "🕹️ awaiting prod trigger"
+        commits_url = f"https://gitlab.com/{dep['project_path']}/-/commits/main?ref_type=HEADS"
+        return f"[🕹️ awaiting prod trigger]({commits_url})"
     return "🔹 prod " + ", ".join(sorted(s for s in statuses if s))
 
 
