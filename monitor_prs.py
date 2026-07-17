@@ -270,11 +270,22 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
 TASK_MAX = 40
 TITLE_MAX = 50
 
+_OSC_RE = re.compile("\033\\][^\a]*\a")
+
+
+def _hyperlink(text: str, url: str) -> str:
+    """OSC 8 terminal hyperlink: renders as clickable `text` (cmd+click in
+    iTerm2) with the URL invisible — unlike a markdown link, which the terminal
+    shows raw."""
+    return f"\033]8;;{url}\a{text}\033]8;;\a"
+
 
 def _display_width(text: str) -> int:
-    """Terminal cell width, counting East-Asian-wide chars (incl. emoji) as 2 so
-    the emoji-bearing Status column stays aligned. `str.ljust` can't — it counts
-    a single-codepoint emoji as 1 while the terminal renders it 2 cells wide."""
+    """Terminal cell width: OSC escape sequences (hyperlinks) occupy no cells,
+    and East-Asian-wide chars (incl. emoji) count as 2 so the emoji-bearing
+    Status column stays aligned. `str.ljust` can't do either — it counts a
+    single-codepoint emoji as 1 while the terminal renders it 2 cells wide."""
+    text = _OSC_RE.sub("", text)
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
 
 
@@ -376,7 +387,7 @@ def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> 
         return "🚀 prod deploying"
     if statuses & {"manual", "created", "skipped"}:
         commits_url = f"https://gitlab.com/{dep['project_path']}/-/commits/main?ref_type=HEADS"
-        return f"[🕹️ awaiting prod trigger]({commits_url})"
+        return _hyperlink("🕹️ awaiting prod trigger", commits_url)
     return "🔹 prod " + ", ".join(sorted(s for s in statuses if s))
 
 

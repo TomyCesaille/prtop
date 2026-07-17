@@ -144,9 +144,12 @@ field; `check_deployments` pops it.
 - **`action_needed` covers open-PR work only** — a fully-approved mergeable MR,
   a needed rebase, or conflicts. Deployment status must never flip it. It is
   never printed; it exists solely to pick the tab colour.
-- **`🕹️ awaiting prod trigger` is a markdown link** to the project's
-  `/-/commits/main?ref_type=HEADS` page (built from the deployment entry's
-  `project_path`) — that page is where the manual prod job gets triggered from.
+- **`🕹️ awaiting prod trigger` is an OSC 8 terminal hyperlink** (`_hyperlink`,
+  BEL-terminated) to the project's `/-/commits/main?ref_type=HEADS` page (built
+  from the deployment entry's `project_path`) — that page is where the manual
+  prod job gets triggered from. Not a markdown link: the terminal would show
+  the URL raw. BEL termination keeps it stripped by `watch_prs.sh`'s
+  `normalize` and by `_display_width`, so it never skews diffs or padding.
   Keep the label text inside the link unchanged; the skill matches on it.
 - **iTerm colour at the very end**, exactly once, after the table.
 - **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A

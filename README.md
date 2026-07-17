@@ -15,7 +15,7 @@ State lives in `~/.claude/pr-monitor-state.json`.
 
 - Python 3.10+ (stdlib only — no `pip install` needed)
 - [`glab`](https://gitlab.com/gitlab-org/cli) authenticated as `jdoe`
-- macOS iTerm2 (optional; tab colour is set via OSC escape codes that other terminals ignore)
+- macOS iTerm2 (optional; tab colour and the awaiting-prod-trigger hyperlink use OSC escape codes that other terminals ignore)
 
 ## Usage
 
