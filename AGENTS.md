@@ -56,7 +56,10 @@ weakest channel last:
 2. **Position** — rows sort by mark, then by task, repo and MR number, and
    `_split_by_mark` rules off each severity block, so a block can be read without
    scanning the marks at all and one task's MRs stay adjacent inside it.
-3. **Text label** (`conflict + not_approved`) — unambiguous on its own.
+3. **Text label** (`conflicts, unapproved`) — unambiguous on its own. Plain words
+   rather than GitLab's `detailed_merge_status` enum, and short enough to fit
+   `STATUS_WIDTH`; the approval state rides along as `, approved` / `, unapproved`
+   except where the label already implies it (`draft`, `awaiting review`).
 4. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
    two different meanings across the open/deploy halves of the Status column, and
    never distinguished from another glyph by hue alone.

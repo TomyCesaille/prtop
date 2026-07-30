@@ -37,7 +37,7 @@ def row(mark, *, pr="`p!1`", status="s", title="title", task="task"):
     return Row(mark=mark, title=title, task=task, pr=pr, status=status)
 
 
-WIDEST_STATUS = "💬 discussions_not_resolved + fully_approved"
+WIDEST_STATUS = "🔍 merge check running, unapproved"
 
 PIPELINE_STATES = PIPELINE_INFLIGHT | {"failed", "success", "canceled", "skipped", "manual"}
 JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manual", "created"}
@@ -93,11 +93,15 @@ class SeverityMarks(unittest.TestCase):
         # GitLab sets has_conflicts independently of detailed_merge_status.
         mark, cell = fmt_status("not_approved", False, True)
         self.assertEqual(mark, ACT)
-        self.assertIn("conflict", cell)
+        self.assertIn("conflicts", cell)
 
-    def test_draft_and_not_approved_labels_skip_the_redundant_qualifier(self):
-        self.assertTrue(fmt_status("draft_status", False, False)[1].endswith("draft_status"))
-        self.assertTrue(fmt_status("not_approved", False, False)[1].endswith("not_approved"))
+    def test_a_state_that_already_names_the_approval_skips_the_suffix(self):
+        self.assertEqual(fmt_status("draft_status", False, False)[1], "📝 draft")
+        self.assertEqual(fmt_status("not_approved", False, False)[1], "👀 awaiting review")
+
+    def test_every_other_state_spells_out_the_approval_beside_it(self):
+        self.assertEqual(fmt_status("mergeable", True, False)[1], "✅ mergeable, approved")
+        self.assertEqual(fmt_status("ci_still_running", False, False)[1], "⏳ CI running, unapproved")
 
 
 class TaskNames(unittest.TestCase):
@@ -172,15 +176,19 @@ class AccessibilityContract(unittest.TestCase):
         self.assertLessEqual(produced, set(_MARK_ORDER))
 
     def test_no_state_is_reported_by_glyph_alone(self):
-        for status in _MERGE_STATUS:
-            cell = fmt_status(status, False, False)[1]
-            self.assertIn(status, cell, f"{status} has no text label beside its glyph")
+        for status, (_, _, label) in _MERGE_STATUS.items():
+            self.assertTrue(label, f"{status} has no text label beside its glyph")
+            self.assertIn(label, fmt_status(status, False, False)[1])
+
+    def test_an_unrecognised_status_is_labelled_with_its_raw_enum(self):
+        self.assertIn("a_status_gitlab_adds_later",
+                      fmt_status("a_status_gitlab_adds_later", False, False)[1])
 
     def test_a_glyph_never_carries_two_meanings_in_the_status_column(self):
         # ⏳ is the one deliberate share: a pipeline in flight is a single state
         # whether the MR is open or already merged.
         by_glyph: dict[str, set[str]] = {}
-        for status, (_, glyph) in _MERGE_STATUS.items():
+        for status, (_, glyph, _label) in _MERGE_STATUS.items():
             by_glyph.setdefault(glyph, set()).add(status)
         deploy_cases = [
             ("running", []),
@@ -258,8 +266,8 @@ class Ordering(unittest.TestCase):
 class TableRendering(unittest.TestCase):
     def test_emoji_bearing_rows_keep_the_right_border_aligned(self):
         rows = [
-            row(ACT, status="✅ mergeable + fully_approved"),
-            row(RUNNING, pr="`p!2`", status="⏳ ci_still_running"),
+            row(ACT, status="✅ mergeable, approved"),
+            row(RUNNING, pr="`p!2`", status="⏳ CI running, unapproved"),
         ]
         widths = {_display_width(line) for line in _render_table(HEADERS, rows).splitlines()}
         self.assertEqual(len(widths), 1, "table lines differ in rendered width")

@@ -67,7 +67,7 @@ column are the whole picture.
 
    | Mark | Meaning | Examples |
    |---|---|---|
-   | `!` | on me now | mergeable + fully approved, need-rebase, conflict, awaiting prod trigger, failed pipeline |
+   | `!` | on me now | mergeable and approved, rebase needed, conflicts, awaiting prod trigger, failed pipeline |
    | `?` | on me to look at or reply to | requested changes, unresolved discussions, an unrecognised status |
    | `~` | on someone else, until a person moves | not approved, draft, blocked by another MR |
    | `.` | on a machine, resolves by itself | CI running, mergeability being computed, prod deploying |
@@ -81,8 +81,9 @@ column are the whole picture.
    label alone.
 
    The two row groups:
-   - **open MRs first**, Status = review state (draft, not-approved, need-rebase,
-     conflict, mergeable, fully-approved, …);
+   - **open MRs first**, Status = review state in plain words, with the approval
+     state appended (`draft`, `awaiting review`, `rebase needed, unapproved`,
+     `mergeable, approved`, …);
    - **merged-but-not-yet-deployed MRs at the bottom**, Status = deploy state
      (awaiting prod trigger, prod deploying, prod deploy failed, pipeline
      building/failed). A merged MR drops off — and out of tracking — once

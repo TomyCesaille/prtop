@@ -142,27 +142,35 @@ _MARK_ORDER = {ACT: 0, ANSWER: 1, PEOPLE: 2, RUNNING: 3}
 # column — ⏳ spans both only because a pipeline in flight is one state — and
 # silhouettes are picked to stay distinguishable when a terminal drops the color
 # and renders them as monochrome outlines.
+#
+# The label is the state in plain words, not GitLab's `detailed_merge_status`
+# enum: the report is read at a glance, and a label two words long leaves the
+# Task column the width it needs. Keep a new one inside `STATUS_WIDTH`.
 _MERGE_STATUS = {
-    "draft_status":             (PEOPLE, "📝"),
-    "not_approved":             (PEOPLE, "👀"),
-    "need_rebase":              (ACT, "🔁"),
-    "conflict":                 (ACT, "💥"),
-    "ci_still_running":         (RUNNING, "⏳"),
-    "ci_must_pass":             (RUNNING, "⏳"),
-    "checking":                 (RUNNING, "🔍"),
-    "unchecked":                (RUNNING, "🔍"),
-    "discussions_not_resolved": (ANSWER, "💬"),
-    "blocked_status":           (PEOPLE, "🚧"),
-    "requested_changes":        (ANSWER, "⛔"),
+    "draft_status":             (PEOPLE, "📝", "draft"),
+    "not_approved":             (PEOPLE, "👀", "awaiting review"),
+    "need_rebase":              (ACT, "🔁", "rebase needed"),
+    "conflict":                 (ACT, "💥", "conflicts"),
+    "ci_still_running":         (RUNNING, "⏳", "CI running"),
+    "ci_must_pass":             (RUNNING, "⏳", "CI must pass"),
+    "checking":                 (RUNNING, "🔍", "merge check running"),
+    "unchecked":                (RUNNING, "🔍", "merge check pending"),
+    "discussions_not_resolved": (ANSWER, "💬", "unresolved threads"),
+    "blocked_status":           (PEOPLE, "🚧", "blocked"),
+    "requested_changes":        (ANSWER, "⛔", "changes requested"),
 }
 
+# These two already name the approval state; the suffix would repeat it.
+_APPROVAL_IMPLIED = ("draft_status", "not_approved")
 
-def status_signal(merge_status: str, fully_approved: bool) -> tuple[str, str]:
+
+def status_signal(merge_status: str, fully_approved: bool) -> tuple[str, str, str]:
     # An unmapped status is a gap in this table, not a quiet state: surface it at
-    # `?` so a merge status GitLab adds later can't sit unnoticed at the bottom.
+    # `?`, under its raw enum, so a merge status GitLab adds later can't sit
+    # unnoticed at the bottom.
     if merge_status == "mergeable":
-        return (ACT, "✅") if fully_approved else (PEOPLE, "👀")
-    return _MERGE_STATUS.get(merge_status, (ANSWER, "❔"))
+        return (ACT, "✅", "mergeable") if fully_approved else (PEOPLE, "👀", "mergeable")
+    return _MERGE_STATUS.get(merge_status, (ANSWER, "❔", merge_status))
 
 
 def fmt_status(merge_status: str, fully_approved: bool, has_conflicts: bool) -> tuple[str, str]:
@@ -172,13 +180,9 @@ def fmt_status(merge_status: str, fully_approved: bool, has_conflicts: bool) -> 
     # on the user whatever the review state says.
     if has_conflicts:
         merge_status = "conflict"
-    # `draft_status` and `not_approved` already encode the approval state — no
-    # need to tack on a redundant qualifier.
-    if merge_status in ("draft_status", "not_approved"):
-        label = merge_status
-    else:
-        label = f"{merge_status} + {'fully_approved' if fully_approved else 'not_approved'}"
-    mark, glyph = status_signal(merge_status, fully_approved)
+    mark, glyph, label = status_signal(merge_status, fully_approved)
+    if merge_status not in _APPROVAL_IMPLIED:
+        label += ", approved" if fully_approved else ", unapproved"
     return mark, f"{glyph} {label}"
 
 
@@ -297,7 +301,7 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
 
 # ---------- Rendering ----------
 
-TASK_MAX = 48
+TASK_MAX = 58
 TITLE_MAX = 42
 
 _OSC_RE = re.compile("\033\\][^\a]*\a")
@@ -334,11 +338,11 @@ class Row(NamedTuple):
 
 
 # The widest Status cell the two tables can produce
-# (`💬 discussions_not_resolved + fully_approved`). Flooring the column there
+# (`🔍 merge check running, unapproved`). Flooring the column there
 # holds the table at one width as MRs move between states, instead of reflowing
 # the whole thing on every check. A cell carrying text no vocabulary bounds — an
 # unmapped merge status, a `check failed:` message — still widens the column.
-STATUS_WIDTH = 44
+STATUS_WIDTH = 34
 
 HEADERS = ("", "PR title", "Task", "PR", "Status")
 MIN_WIDTHS = (0, 0, 0, 0, STATUS_WIDTH)
