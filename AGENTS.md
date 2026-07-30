@@ -37,18 +37,33 @@ If you change the marks, the Status labels, or the columns, update the skill's
 interpretation table.
 
 **Accessibility contract.** The report is read by scanning, and must not rely on
-color, emoji fidelity, or fine glyph detail. So state is encoded three times
-over, weakest channel last:
+color, emoji fidelity, or fine glyph detail. So state is encoded four times over,
+weakest channel last:
 
-1. **Severity mark** (`!` on you / `?` to answer / `~` waiting) — plain ASCII,
-   one cell wide, and the table is sorted by it so action rows are always on top.
-   This is the channel that must never regress.
-2. **Text label** (`conflict + not_approved`) — unambiguous on its own.
-3. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
+1. **Severity mark** — plain ASCII, one cell wide. This is the channel that must
+   never regress.
+
+   | Mark | Meaning |
+   |---|---|
+   | `!` | on the user now |
+   | `?` | on the user to look at or reply to |
+   | `~` | on someone else; it sits there until a person moves |
+   | `.` | on a machine; it resolves by itself |
+
+   The marks also read as a weight gradient (`!` heaviest → `.` lightest), so
+   the eye finds the top of the table without resolving the characters. Keep any
+   new mark inside that gradient.
+2. **Position** — rows sort by mark, and `_split_by_mark` rules off each severity
+   block, so a block can be read without scanning the marks at all.
+3. **Text label** (`conflict + not_approved`) — unambiguous on its own.
+4. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
    two different meanings across the open/deploy halves of the Status column, and
    never distinguished from another glyph by hue alone.
 
-Adding a state means picking its mark first and its glyph last.
+Adding a state means picking its mark first and its glyph last. `test_status.py`
+holds this contract as executable tests — an `AccessibilityContract` case fails
+if a state goes glyph-only, a mark stops being single-char ASCII, or a glyph
+picks up a second meaning.
 
 ## Architecture
 
@@ -180,11 +195,21 @@ field; `check_deployments` pops it.
 
 ## Testing
 
-There is no test suite. Don't run the script against the live state file for
-testing — a run advances the merge-detection baseline (an MR that merged between
-the real last run and your test run would be recorded as tracked/handled and
-missed by the next real run). Point `PR_MONITOR_STATE_FILE` at a scratch copy
-instead:
+```bash
+python3 test_status.py
+```
+
+`test_status.py` covers the pure layer — severity marks, deploy signals, the
+accessibility contract, ordering, the tally, and table rendering. Stdlib
+`unittest`, no network, no state file. Run it after any change to marks, glyphs,
+status labels, or the table; add a case alongside each new state.
+
+Everything above that layer (GitLab fetching, merge detection, the production
+frontier) has no automated coverage and needs a real run. Don't run the script
+against the live state file for testing — a run advances the merge-detection
+baseline (an MR that merged between the real last run and your test run would be
+recorded as tracked/handled and missed by the next real run). Point
+`PR_MONITOR_STATE_FILE` at a scratch copy instead:
 
 ```bash
 cp ~/.claude/pr-monitor-state.json /tmp/scratch-state.json

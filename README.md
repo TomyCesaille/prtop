@@ -59,8 +59,8 @@ the Status column are the whole picture.
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
 4. **Prints one table** — `⟨mark⟩ | Task | PR title | PR | Status`, sorted so
-   rows needing action come first, with the two groups split by a separator rule
-   when both are present.
+   rows needing action come first, with a separator rule between each severity
+   block and between the two row groups.
 
    The unlabelled first column is the severity mark, the primary status channel:
    plain ASCII, so it survives any terminal, font size, or colour vision.
@@ -69,7 +69,12 @@ the Status column are the whole picture.
    |---|---|---|
    | `!` | on me now | mergeable + fully approved, need-rebase, conflict, awaiting prod trigger, failed pipeline |
    | `?` | on me to look at or reply to | requested changes, unresolved discussions, an unrecognised status |
-   | `~` | on someone or something else | not approved, draft, CI running, prod deploying |
+   | `~` | on someone else, until a person moves | not approved, draft, blocked by another MR |
+   | `.` | on a machine, resolves by itself | CI running, mergeability being computed, prod deploying |
+
+   The marks read as a weight gradient — `!` is the heaviest shape, `.` the
+   lightest — so the eye lands on the top of the table without resolving the
+   characters.
 
    The Status column repeats the same state as a glyph plus a text label. Glyphs
    are redundant garnish — every distinction is readable from the mark and the
@@ -86,9 +91,9 @@ the Status column are the whole picture.
      commit carries the earlier ones with it). See
      `latest_prod_shipped_pipeline_id`. These rows are purely informational and
      never affect the tab colour.
-5. **Prints the severity tally** under the table — `! 1 on you  ~ 7 waiting`,
-   listing only the non-empty buckets. It doubles as the legend for the mark
-   column and as the text equivalent of the tab colour.
+5. **Prints the severity tally** under the table — `! 1 on you  ~ 5 with people
+   . 2 running`, listing only the non-empty buckets. It doubles as the legend for
+   the mark column and as the text equivalent of the tab colour.
 6. **Sets the iTerm2 tab colour**, a convenience duplicate of the tally's `!`
    bucket. It tracks **only open-PR work** — a fully-approved mergeable MR, a
    needed rebase, or conflicts. Deployment progress never flips it, and nothing

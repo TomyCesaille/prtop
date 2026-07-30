@@ -23,10 +23,11 @@ import sys
 import time
 import unicodedata
 from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote
 
 
@@ -124,13 +125,21 @@ def mr_short_id(project_path: str, iid: int) -> str:
 
 # The severity mark is the primary status channel: plain ASCII, one column wide,
 # and legible regardless of color, glyph rendering, or font size. Rows sort by
-# it, so whatever is on the user sits at the top of the table.
-ACT = "!"     # on you now
-ANSWER = "?"  # on you to look at or reply to
-WAIT = "~"    # on someone or something else
+# it, so whatever is on the user sits at the top of the table. The four marks also
+# read as a weight gradient — `!` is the heaviest shape, `.` the lightest — so
+# the eye lands on the top of the table without resolving the characters.
+ACT = "!"      # on you now
+ANSWER = "?"   # on you to look at or reply to
+PEOPLE = "~"   # on someone else, and it will sit there until a person moves
+RUNNING = "."  # on a machine, and it resolves by itself
 
-_MARK_ORDER = {ACT: 0, ANSWER: 1, WAIT: 2}
-_MARK_LABELS = ((ACT, "on you"), (ANSWER, "to answer"), (WAIT, "waiting"))
+_MARK_ORDER = {ACT: 0, ANSWER: 1, PEOPLE: 2, RUNNING: 3}
+_MARK_LABELS = (
+    (ACT, "on you"),
+    (ANSWER, "to answer"),
+    (PEOPLE, "with people"),
+    (RUNNING, "running"),
+)
 
 # Glyphs are a second, redundant channel. A glyph never carries two different
 # meanings across the open-MR and awaiting-deploy halves of the shared Status
@@ -138,23 +147,25 @@ _MARK_LABELS = ((ACT, "on you"), (ANSWER, "to answer"), (WAIT, "waiting"))
 # silhouettes are picked to stay distinguishable when a terminal drops the color
 # and renders them as monochrome outlines.
 _MERGE_STATUS = {
-    "draft_status":             (WAIT, "📝"),
-    "not_approved":             (WAIT, "👀"),
+    "draft_status":             (PEOPLE, "📝"),
+    "not_approved":             (PEOPLE, "👀"),
     "need_rebase":              (ACT, "🔁"),
     "conflict":                 (ACT, "💥"),
-    "ci_still_running":         (WAIT, "⏳"),
-    "ci_must_pass":             (WAIT, "⏳"),
-    "checking":                 (WAIT, "🔍"),
-    "unchecked":                (WAIT, "🔍"),
+    "ci_still_running":         (RUNNING, "⏳"),
+    "ci_must_pass":             (RUNNING, "⏳"),
+    "checking":                 (RUNNING, "🔍"),
+    "unchecked":                (RUNNING, "🔍"),
     "discussions_not_resolved": (ANSWER, "💬"),
-    "blocked_status":           (WAIT, "🚧"),
+    "blocked_status":           (PEOPLE, "🚧"),
     "requested_changes":        (ANSWER, "⛔"),
 }
 
 
 def status_signal(merge_status: str, fully_approved: bool) -> tuple[str, str]:
+    # An unmapped status is a gap in this table, not a quiet state: surface it at
+    # `?` so a merge status GitLab adds later can't sit unnoticed at the bottom.
     if merge_status == "mergeable":
-        return (ACT, "✅") if fully_approved else (WAIT, "👀")
+        return (ACT, "✅") if fully_approved else (PEOPLE, "👀")
     return _MERGE_STATUS.get(merge_status, (ANSWER, "❔"))
 
 
@@ -316,7 +327,20 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def _render_table(headers: list[str], rows: list[list[str] | None]) -> str:
+class Row(NamedTuple):
+    """One table line. Field order is column order — `HEADERS` labels it."""
+
+    mark: str
+    task: str
+    title: str
+    pr: str
+    status: str
+
+
+HEADERS = ("", "Task", "PR title", "PR", "Status")
+
+
+def _render_table(headers: Sequence[str], rows: Sequence[Row | None]) -> str:
     """`None` in `rows` renders as a horizontal rule, separating row groups."""
     body = [r for r in rows if r is not None]
     widths = [max([_display_width(h)] + [_display_width(r[i]) for r in body])
@@ -325,40 +349,51 @@ def _render_table(headers: list[str], rows: list[list[str] | None]) -> str:
     def pad(cell: str, w: int) -> str:
         return cell + " " * (w - _display_width(cell))
 
-    def line(cells: list[str]) -> str:
+    def line(cells: Sequence[str]) -> str:
         return "| " + " | ".join(pad(c, w) for c, w in zip(cells, widths)) + " |"
 
     sep = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
-def _by_severity(rows: list[list[str]]) -> list[list[str]]:
+def _by_severity(rows: list[Row]) -> list[Row]:
     """Action-first ordering, MR id breaking ties within a severity."""
-    return sorted(rows, key=lambda r: (_MARK_ORDER.get(r[0], 9), r[3]))
+    return sorted(rows, key=lambda r: (_MARK_ORDER.get(r.mark, 9), r.pr))
 
 
-def summary_line(rows: list[list[str] | None]) -> str:
+def _split_by_mark(rows: list[Row]) -> list[Row | None]:
+    """Rule off each severity block so the eye can land on one block at a time.
+    Expects `_by_severity` order, where equal marks are already adjacent."""
+    out: list[Row | None] = []
+    for i, row in enumerate(rows):
+        if i and row.mark != rows[i - 1].mark:
+            out.append(None)
+        out.append(row)
+    return out
+
+
+def summary_line(rows: Sequence[Row | None]) -> str:
     """Severity tally under the table: the legend for the mark column, and the
     text twin of the iTerm tab color."""
-    counts = Counter(r[0] for r in rows if r is not None)
+    counts = Counter(r.mark for r in rows if r is not None)
     return "  ".join(
         f"{mark} {counts[mark]} {label}" for mark, label in _MARK_LABELS if counts[mark]
     )
 
 
-def open_mr_rows(open_mrs: dict) -> list[list[str]]:
+def open_mr_rows(open_mrs: dict) -> list[Row]:
     rows = []
     for mr_id, info in open_mrs.items():
         mark, status = fmt_status(
             info["merge_status"], info["fully_approved"], info["has_conflicts"]
         )
-        rows.append([
-            mark,
-            _truncate(info.get("task_name") or "—", TASK_MAX),
-            _truncate(info["title"], TITLE_MAX),
-            f"`{mr_id}`",
-            status,
-        ])
+        rows.append(Row(
+            mark=mark,
+            task=_truncate(info.get("task_name") or "—", TASK_MAX),
+            title=_truncate(info["title"], TITLE_MAX),
+            pr=f"`{mr_id}`",
+            status=status,
+        ))
     return _by_severity(rows)
 
 
@@ -414,26 +449,26 @@ def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> 
     """(severity mark, Status cell) for an MR that is merged but not yet in
     production."""
     if pipeline_status in PIPELINE_INFLIGHT:
-        return WAIT, f"⏳ pipeline {pipeline_status}"
+        return RUNNING, f"⏳ pipeline {pipeline_status}"
     if pipeline_status == "failed":
         return ACT, "❌ pipeline failed"
 
     prod = primary_prod_jobs(jobs)
     if not prod:
-        return WAIT, f"➖ {pipeline_status}, no prod job"
+        return PEOPLE, f"➖ {pipeline_status}, no prod job"
     dep["prod_job_id"] = prod[0]["id"]
     statuses = {j.get("status") for j in prod}
     if "failed" in statuses:
         return ACT, "❌ prod deploy failed"
     if statuses & PROD_DEPLOYING:
-        return WAIT, "📦 prod deploying"
+        return RUNNING, "📦 prod deploying"
     if statuses & {"manual", "created", "skipped"}:
         commits_url = f"https://gitlab.com/{dep['project_path']}/-/commits/main?ref_type=HEADS"
         return ACT, _hyperlink("🕹️ awaiting prod trigger", commits_url)
     return ANSWER, "➖ prod " + ", ".join(sorted(s for s in statuses if s))
 
 
-def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool, list[str] | None]:
+def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool, Row | None]:
     """Returns (mr_id, is_in_production, table_row_or_None)."""
     mr_id, dep, frontier = item
     dep.pop("stage", None)  # legacy field from the interactive era
@@ -453,17 +488,17 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
     except GlabError as e:
         mark, deploy_status = ANSWER, f"⚠️ check failed: {e}"
 
-    row = [
-        mark,
-        _truncate(dep.get("task_name") or "—", TASK_MAX),
-        _truncate(dep.get("title", ""), TITLE_MAX),
-        f"`{mr_id}`",
-        deploy_status,
-    ]
+    row = Row(
+        mark=mark,
+        task=_truncate(dep.get("task_name") or "—", TASK_MAX),
+        title=_truncate(dep.get("title", ""), TITLE_MAX),
+        pr=f"`{mr_id}`",
+        status=deploy_status,
+    )
     return mr_id, False, row
 
 
-def check_deployments(state: dict) -> list[list[str]]:
+def check_deployments(state: dict) -> list[Row]:
     """Refresh deployment tracking and return table rows for MRs that are
     merged but not yet in production, action-first.
 
@@ -480,19 +515,19 @@ def check_deployments(state: dict) -> list[list[str]]:
         frontiers = dict(zip(projects, pool.map(latest_prod_shipped_pipeline_id, projects)))
 
     items = [(mr_id, dep, frontiers.get(dep["project"])) for mr_id, dep in deployments.items()]
-    pending: list[tuple[str, list[str]]] = []
+    pending: list[Row] = []
     to_remove: list[str] = []
     with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
         for mr_id, in_prod, row in pool.map(_evaluate_deployment, items):
             if in_prod:
                 to_remove.append(mr_id)
             elif row is not None:
-                pending.append((mr_id, row))
+                pending.append(row)
 
     for mr_id in to_remove:
         deployments.pop(mr_id, None)
 
-    return _by_severity([row for _, row in pending])
+    return _by_severity(pending)
 
 
 # ---------- Wall-clock alignment ----------
@@ -541,16 +576,16 @@ def run_once() -> None:
     deploy_rows = check_deployments(state)
     # Open MRs on top, merged-but-not-yet-deployed at the bottom (deploy status
     # in the same Status column), with a separator rule between the two groups
-    # when both are present.
-    rows: list[list[str] | None] = list(open_rows)
+    # when both are present, and another between each severity block inside them.
+    rows: list[Row | None] = _split_by_mark(open_rows)
     if deploy_rows:
         if open_rows:
             rows.append(None)
-        rows.extend(deploy_rows)
+        rows.extend(_split_by_mark(deploy_rows))
 
     print()
     if rows:
-        print(_render_table(["", "Task", "PR title", "PR", "Status"], rows))
+        print(_render_table(HEADERS, rows))
         print(summary_line(rows))
     else:
         print("_(no open MRs or pending deploys)_")
@@ -559,7 +594,7 @@ def run_once() -> None:
     # resolve conflicts. Deployment progress is reported above but never flips
     # this flag. Reflects persistent state, not just transitions: an MR that has
     # been fully-approved-and-mergeable for several cycles is still on me.
-    action_needed = any(row[0] == ACT for row in open_rows)
+    action_needed = any(row.mark == ACT for row in open_rows)
 
     save_state(state)
     set_iterm_tab_color(action_needed)
