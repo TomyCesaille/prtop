@@ -193,6 +193,13 @@ field; `check_deployments` pops it.
 - **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A
   single-codepoint emoji in the Status column (👀, ✅, …) is 1 code point but 2
   terminal cells; padding by `len` under-counts it and skews the right border.
+- **The Status column is floored at `STATUS_WIDTH`** (via `MIN_WIDTHS`), the
+  widest cell the status vocabulary can produce, so one MR changing state can't
+  reflow the whole table. `watch_prs.sh` exits on any text change and hands the
+  new report to an agent to read: with a floating column every row's padding
+  shifts at once, hiding which row actually moved. A new or longer status label
+  means updating the constant; `test_status.py` enumerates the vocabulary and
+  fails if it drifts either way.
 
 ## Testing
 

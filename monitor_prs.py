@@ -333,14 +333,29 @@ class Row(NamedTuple):
     status: str
 
 
+# The widest Status cell the two tables can produce
+# (`💬 discussions_not_resolved + fully_approved`). Flooring the column there
+# holds the table at one width as MRs move between states, instead of reflowing
+# the whole thing on every check. A cell carrying text no vocabulary bounds — an
+# unmapped merge status, a `check failed:` message — still widens the column.
+STATUS_WIDTH = 44
+
 HEADERS = ("", "PR title", "Task", "PR", "Status")
+MIN_WIDTHS = (0, 0, 0, 0, STATUS_WIDTH)
 
 
-def _render_table(headers: Sequence[str], rows: Sequence[Row | None]) -> str:
-    """`None` in `rows` renders as a horizontal rule, separating row groups."""
+def _render_table(
+    headers: Sequence[str], rows: Sequence[Row | None], min_widths: Sequence[int] = ()
+) -> str:
+    """`None` in `rows` renders as a horizontal rule, separating row groups.
+    `min_widths` floors a column so its width survives a change of content."""
     body = [r for r in rows if r is not None]
-    widths = [max([_display_width(h)] + [_display_width(r[i]) for r in body])
-              for i, h in enumerate(headers)]
+
+    def width(i: int, header: str) -> int:
+        floor = min_widths[i] if i < len(min_widths) else 0
+        return max([floor, _display_width(header)] + [_display_width(r[i]) for r in body])
+
+    widths = [width(i, h) for i, h in enumerate(headers)]
 
     def pad(cell: str, w: int) -> str:
         return cell + " " * (w - _display_width(cell))
@@ -578,7 +593,7 @@ def run_once() -> None:
 
     print()
     if rows:
-        print(_render_table(HEADERS, rows))
+        print(_render_table(HEADERS, rows, MIN_WIDTHS))
     else:
         print("_(no open MRs or pending deploys)_")
 

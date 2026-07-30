@@ -11,8 +11,12 @@ from monitor_prs import (
     ACT,
     ANSWER,
     HEADERS,
+    MIN_WIDTHS,
     PEOPLE,
+    PIPELINE_INFLIGHT,
+    PROD_DEPLOYING,
     RUNNING,
+    STATUS_WIDTH,
     Row,
     _MARK_ORDER,
     _MERGE_STATUS,
@@ -31,6 +35,25 @@ from monitor_prs import (
 
 def row(mark, *, pr="`p!1`", status="s", title="title", task="task"):
     return Row(mark=mark, title=title, task=task, pr=pr, status=status)
+
+
+WIDEST_STATUS = "💬 discussions_not_resolved + fully_approved"
+
+PIPELINE_STATES = PIPELINE_INFLIGHT | {"failed", "success", "canceled", "skipped", "manual"}
+JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manual", "created"}
+
+
+def all_status_cells():
+    """Every Status cell the open and awaiting-deploy tables can produce, bar the
+    ones carrying free text (an unmapped merge status, a `check failed:` error)."""
+    for merge_status in (*_MERGE_STATUS, "mergeable"):
+        for approved in (False, True):
+            yield fmt_status(merge_status, approved, False)[1]
+    for pipeline_status in PIPELINE_STATES:
+        yield pending_deploy_status(pipeline_status, [], {"project_path": "p"})[1]
+        for job_status in JOB_STATES:
+            jobs = [{"name": "deploy_production", "status": job_status, "id": 1}]
+            yield pending_deploy_status(pipeline_status, jobs, {"project_path": "p"})[1]
 
 
 def mr(merge_status="not_approved", *, approved=False, conflicts=False, title="t", task="task"):
@@ -251,6 +274,17 @@ class TableRendering(unittest.TestCase):
                 "🕹️ awaiting prod trigger",
             ),
         )
+
+    def test_the_status_column_keeps_one_width_as_mrs_change_state(self):
+        def rendered_width(status):
+            table = _render_table(HEADERS, [row(ACT, status=status)], MIN_WIDTHS)
+            return _display_width(table.splitlines()[0])
+
+        self.assertEqual(rendered_width("✅ mergeable"), rendered_width(WIDEST_STATUS))
+
+    def test_the_status_column_is_sized_to_the_widest_status_it_can_show(self):
+        widest = max(all_status_cells(), key=_display_width)
+        self.assertEqual(_display_width(widest), STATUS_WIDTH, f"widest cell is now {widest!r}")
 
     def test_none_renders_as_the_rule_between_the_two_row_groups(self):
         rows = [row(ACT), None, row(RUNNING, pr="`p!2`")]
