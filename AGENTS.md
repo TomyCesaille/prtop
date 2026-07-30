@@ -53,8 +53,9 @@ weakest channel last:
    The marks also read as a weight gradient (`!` heaviest → `.` lightest), so
    the eye finds the top of the table without resolving the characters. Keep any
    new mark inside that gradient.
-2. **Position** — rows sort by mark, and `_split_by_mark` rules off each severity
-   block, so a block can be read without scanning the marks at all.
+2. **Position** — rows sort by mark, then by task, repo and MR number, and
+   `_split_by_mark` rules off each severity block, so a block can be read without
+   scanning the marks at all and one task's MRs stay adjacent inside it.
 3. **Text label** (`conflict + not_approved`) — unambiguous on its own.
 4. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
    two different meanings across the open/deploy halves of the Status column, and

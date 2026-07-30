@@ -21,6 +21,7 @@ from monitor_prs import (
     _hyperlink,
     _render_table,
     _split_by_mark,
+    extract_task_name,
     fmt_status,
     open_mr_rows,
     pending_deploy_status,
@@ -74,6 +75,32 @@ class SeverityMarks(unittest.TestCase):
     def test_draft_and_not_approved_labels_skip_the_redundant_qualifier(self):
         self.assertTrue(fmt_status("draft_status", False, False)[1].endswith("draft_status"))
         self.assertTrue(fmt_status("not_approved", False, False)[1].endswith("not_approved"))
+
+
+class TaskNames(unittest.TestCase):
+    HASH = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
+    def test_a_task_branch_reads_as_the_notion_task_name(self):
+        self.assertEqual(
+            extract_task_name(f"dev/1234-Add-a-dark-mode-toggle-{self.HASH}"),
+            "1234 Add a dark mode toggle",
+        )
+
+    def test_the_mrs_of_a_task_split_across_a_stack_share_one_task_name(self):
+        stem = f"dev/1234-Add-a-dark-mode-toggle-{self.HASH}"
+        self.assertEqual(
+            extract_task_name(f"{stem}-mr1-theme-tokens"),
+            extract_task_name(f"{stem}-mr2-toggle-ui"),
+        )
+        self.assertEqual(
+            extract_task_name(f"{stem}-mr1-theme-tokens"),
+            extract_task_name(stem),
+        )
+
+    def test_a_branch_outside_the_task_convention_has_no_task(self):
+        self.assertEqual(extract_task_name("dev/quick-fix"), "")
+        self.assertEqual(extract_task_name("main"), "")
+        self.assertEqual(extract_task_name(None), "")
 
 
 class DeploySignals(unittest.TestCase):
@@ -166,9 +193,20 @@ class Ordering(unittest.TestCase):
         ordered = _by_severity(self.rows(RUNNING, PEOPLE, ANSWER, ACT))
         self.assertEqual([r.mark for r in ordered], [ACT, ANSWER, PEOPLE, RUNNING])
 
-    def test_mr_id_breaks_ties_within_a_severity(self):
-        rows = [row(ACT, pr="`b!2`"), row(ACT, pr="`a!1`")]
-        self.assertEqual([r.pr for r in _by_severity(rows)], ["`a!1`", "`b!2`"])
+    def test_the_mrs_of_one_task_stay_together_within_a_severity(self):
+        rows = [
+            row(ACT, task="beta", pr="`frontend!1`"),
+            row(ACT, task="alpha", pr="`worker!2`"),
+            row(ACT, task="alpha", pr="`frontend!3`"),
+        ]
+        self.assertEqual(
+            [(r.task, r.pr) for r in _by_severity(rows)],
+            [("alpha", "`frontend!3`"), ("alpha", "`worker!2`"), ("beta", "`frontend!1`")],
+        )
+
+    def test_the_same_repo_orders_by_mr_number_not_by_digits(self):
+        rows = [row(ACT, pr="`frontend!999`"), row(ACT, pr="`frontend!1817`")]
+        self.assertEqual([r.pr for r in _by_severity(rows)], ["`frontend!999`", "`frontend!1817`"])
 
     def test_each_severity_block_is_ruled_off_from_the_next(self):
         rows = _split_by_mark(self.rows(ACT, ACT, ANSWER, RUNNING))

@@ -59,8 +59,8 @@ column are the whole picture.
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
 4. **Prints one table** — `⟨mark⟩ | PR title | Task | PR | Status`, sorted so
-   rows needing action come first, with a separator rule between each severity
-   block and between the two row groups.
+   rows needing action come first, then by task, repo and MR number, with a
+   separator rule between each severity block and between the two row groups.
 
    The unlabelled first column is the severity mark, the primary status channel:
    plain ASCII, so it survives any terminal, font size, or colour vision.

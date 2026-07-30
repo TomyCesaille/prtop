@@ -58,7 +58,10 @@ DEPLOY_PROD_JOB_RE = re.compile(r"deploy.*prod|prod.*deploy", re.I)
 # (_heavy_duty, _certificates_exporter, …) that are deployed separately and
 # often left un-triggered. Its success is what marks "shipped to production".
 PRIMARY_PROD_DEPLOY_RE = re.compile(r"^deploy[_-]production$", re.I)
-TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}$")
+# The Notion hash ends the task slug, but a branch may carry a per-MR suffix
+# after it (`…-mr1-theme-tokens`) when one task is split across a stack of
+# MRs. The suffix stays out of the captured name so those MRs share one task.
+TASK_BRANCH_RE = re.compile(rf"^{TRIGRAM}/(.+?)-[0-9a-f]{{32}}(?:-.+)?$")
 
 
 # ---------- Subprocess helpers ----------
@@ -294,8 +297,8 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
 
 # ---------- Rendering ----------
 
-TASK_MAX = 40
-TITLE_MAX = 50
+TASK_MAX = 48
+TITLE_MAX = 42
 
 _OSC_RE = re.compile("\033\\][^\a]*\a")
 
@@ -349,9 +352,15 @@ def _render_table(headers: Sequence[str], rows: Sequence[Row | None]) -> str:
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
+def _sort_key(row: Row) -> tuple[int, str, str, int]:
+    """Severity first, then task, repo and MR number — so the several MRs of one
+    task stay adjacent inside a severity block, in repo then numeric order."""
+    repo, _, iid = row.pr.strip("`").partition("!")
+    return _MARK_ORDER.get(row.mark, 9), row.task, repo, int(iid)
+
+
 def _by_severity(rows: list[Row]) -> list[Row]:
-    """Action-first ordering, MR id breaking ties within a severity."""
-    return sorted(rows, key=lambda r: (_MARK_ORDER.get(r.mark, 9), r.pr))
+    return sorted(rows, key=_sort_key)
 
 
 def _split_by_mark(rows: list[Row]) -> list[Row | None]:
