@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,35 +122,57 @@ def mr_short_id(project_path: str, iid: int) -> str:
     return f"{project_path.rsplit('/', 1)[-1]}!{iid}"
 
 
-_STATUS_EMOJI = {
-    "draft_status": "📝",
-    "not_approved": "👀",
-    "need_rebase": "🔁",
-    "conflict": "⚠️",
-    "ci_still_running": "⏳",
-    "ci_must_pass": "⏳",
-    "checking": "🔍",
-    "unchecked": "🔍",
-    "discussions_not_resolved": "💬",
-    "blocked_status": "🚧",
-    "requested_changes": "🔴",
+# The severity mark is the primary status channel: plain ASCII, one column wide,
+# and legible regardless of color, glyph rendering, or font size. Rows sort by
+# it, so whatever is on the user sits at the top of the table.
+ACT = "!"     # on you now
+ANSWER = "?"  # on you to look at or reply to
+WAIT = "~"    # on someone or something else
+
+_MARK_ORDER = {ACT: 0, ANSWER: 1, WAIT: 2}
+_MARK_LABELS = ((ACT, "on you"), (ANSWER, "to answer"), (WAIT, "waiting"))
+
+# Glyphs are a second, redundant channel. A glyph never carries two different
+# meanings across the open-MR and awaiting-deploy halves of the shared Status
+# column — ⏳ spans both only because a pipeline in flight is one state — and
+# silhouettes are picked to stay distinguishable when a terminal drops the color
+# and renders them as monochrome outlines.
+_MERGE_STATUS = {
+    "draft_status":             (WAIT, "📝"),
+    "not_approved":             (WAIT, "👀"),
+    "need_rebase":              (ACT, "🔁"),
+    "conflict":                 (ACT, "💥"),
+    "ci_still_running":         (WAIT, "⏳"),
+    "ci_must_pass":             (WAIT, "⏳"),
+    "checking":                 (WAIT, "🔍"),
+    "unchecked":                (WAIT, "🔍"),
+    "discussions_not_resolved": (ANSWER, "💬"),
+    "blocked_status":           (WAIT, "🚧"),
+    "requested_changes":        (ANSWER, "⛔"),
 }
 
 
-def status_emoji(merge_status: str, fully_approved: bool) -> str:
+def status_signal(merge_status: str, fully_approved: bool) -> tuple[str, str]:
     if merge_status == "mergeable":
-        return "🚀" if fully_approved else "👀"
-    return _STATUS_EMOJI.get(merge_status, "🔹")
+        return (ACT, "✅") if fully_approved else (WAIT, "👀")
+    return _MERGE_STATUS.get(merge_status, (ANSWER, "❔"))
 
 
-def fmt_status(merge_status: str, fully_approved: bool) -> str:
+def fmt_status(merge_status: str, fully_approved: bool, has_conflicts: bool) -> tuple[str, str]:
+    """(severity mark, Status cell) for an open MR."""
+    # GitLab sets `has_conflicts` independently of `detailed_merge_status`, which
+    # can still read `not_approved` on a conflicting MR. Conflicts win: they are
+    # on the user whatever the review state says.
+    if has_conflicts:
+        merge_status = "conflict"
     # `draft_status` and `not_approved` already encode the approval state — no
     # need to tack on a redundant qualifier.
     if merge_status in ("draft_status", "not_approved"):
         label = merge_status
     else:
         label = f"{merge_status} + {'fully_approved' if fully_approved else 'not_approved'}"
-    return f"{status_emoji(merge_status, fully_approved)} {label}"
+    mark, glyph = status_signal(merge_status, fully_approved)
+    return mark, f"{glyph} {label}"
 
 
 # ---------- Fetch & gather ----------
@@ -309,16 +332,34 @@ def _render_table(headers: list[str], rows: list[list[str] | None]) -> str:
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
+def _by_severity(rows: list[list[str]]) -> list[list[str]]:
+    """Action-first ordering, MR id breaking ties within a severity."""
+    return sorted(rows, key=lambda r: (_MARK_ORDER.get(r[0], 9), r[3]))
+
+
+def summary_line(rows: list[list[str] | None]) -> str:
+    """Severity tally under the table: the legend for the mark column, and the
+    text twin of the iTerm tab color."""
+    counts = Counter(r[0] for r in rows if r is not None)
+    return "  ".join(
+        f"{mark} {counts[mark]} {label}" for mark, label in _MARK_LABELS if counts[mark]
+    )
+
+
 def open_mr_rows(open_mrs: dict) -> list[list[str]]:
-    return [
-        [
+    rows = []
+    for mr_id, info in open_mrs.items():
+        mark, status = fmt_status(
+            info["merge_status"], info["fully_approved"], info["has_conflicts"]
+        )
+        rows.append([
+            mark,
             _truncate(info.get("task_name") or "—", TASK_MAX),
             _truncate(info["title"], TITLE_MAX),
             f"`{mr_id}`",
-            fmt_status(info["merge_status"], info["fully_approved"]),
-        ]
-        for mr_id, info in sorted(open_mrs.items())
-    ]
+            status,
+        ])
+    return _by_severity(rows)
 
 
 # ---------- Deployments ----------
@@ -369,26 +410,27 @@ def latest_prod_shipped_pipeline_id(encoded_project: str) -> int | None:
     return None
 
 
-def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> str:
-    """Human status for an MR that is merged but not yet in production."""
+def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> tuple[str, str]:
+    """(severity mark, Status cell) for an MR that is merged but not yet in
+    production."""
     if pipeline_status in PIPELINE_INFLIGHT:
-        return f"⏳ pipeline {pipeline_status}"
+        return WAIT, f"⏳ pipeline {pipeline_status}"
     if pipeline_status == "failed":
-        return "❌ pipeline failed"
+        return ACT, "❌ pipeline failed"
 
     prod = primary_prod_jobs(jobs)
     if not prod:
-        return f"🔹 {pipeline_status}, no prod job"
+        return WAIT, f"➖ {pipeline_status}, no prod job"
     dep["prod_job_id"] = prod[0]["id"]
     statuses = {j.get("status") for j in prod}
     if "failed" in statuses:
-        return "❌ prod deploy failed"
+        return ACT, "❌ prod deploy failed"
     if statuses & PROD_DEPLOYING:
-        return "🚀 prod deploying"
+        return WAIT, "📦 prod deploying"
     if statuses & {"manual", "created", "skipped"}:
         commits_url = f"https://gitlab.com/{dep['project_path']}/-/commits/main?ref_type=HEADS"
-        return _hyperlink("🕹️ awaiting prod trigger", commits_url)
-    return "🔹 prod " + ", ".join(sorted(s for s in statuses if s))
+        return ACT, _hyperlink("🕹️ awaiting prod trigger", commits_url)
+    return ANSWER, "➖ prod " + ", ".join(sorted(s for s in statuses if s))
 
 
 def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool, list[str] | None]:
@@ -407,11 +449,12 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
         # Safety net for a prod deploy that fell outside the frontier's window.
         if shipped_prod(jobs):
             return mr_id, True, None
-        deploy_status = pending_deploy_status(status, jobs, dep)
+        mark, deploy_status = pending_deploy_status(status, jobs, dep)
     except GlabError as e:
-        deploy_status = f"⚠️ check failed: {e}"
+        mark, deploy_status = ANSWER, f"⚠️ check failed: {e}"
 
     row = [
+        mark,
         _truncate(dep.get("task_name") or "—", TASK_MAX),
         _truncate(dep.get("title", ""), TITLE_MAX),
         f"`{mr_id}`",
@@ -422,7 +465,7 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
 
 def check_deployments(state: dict) -> list[list[str]]:
     """Refresh deployment tracking and return table rows for MRs that are
-    merged but not yet in production, sorted by MR id.
+    merged but not yet in production, action-first.
 
     Deployed MRs are dropped from tracking. Production is judged per project
     against a single frontier (see `latest_prod_shipped_pipeline_id`), so an MR
@@ -449,7 +492,7 @@ def check_deployments(state: dict) -> list[list[str]]:
     for mr_id in to_remove:
         deployments.pop(mr_id, None)
 
-    return [row for _, row in sorted(pending)]
+    return _by_severity([row for _, row in pending])
 
 
 # ---------- Wall-clock alignment ----------
@@ -507,7 +550,8 @@ def run_once() -> None:
 
     print()
     if rows:
-        print(_render_table(["Task", "PR title", "PR", "Status"], rows))
+        print(_render_table(["", "Task", "PR title", "PR", "Status"], rows))
+        print(summary_line(rows))
     else:
         print("_(no open MRs or pending deploys)_")
 
@@ -515,14 +559,7 @@ def run_once() -> None:
     # resolve conflicts. Deployment progress is reported above but never flips
     # this flag. Reflects persistent state, not just transitions: an MR that has
     # been fully-approved-and-mergeable for several cycles is still on me.
-    action_needed = (
-        any(info["has_conflicts"] for info in open_mrs.values())
-        or any(info["merge_status"] == "need_rebase" for info in open_mrs.values())
-        or any(
-            info["fully_approved"] and info["merge_status"] == "mergeable"
-            for info in open_mrs.values()
-        )
-    )
+    action_needed = any(row[0] == ACT for row in open_rows)
 
     save_state(state)
     set_iterm_tab_color(action_needed)

@@ -48,9 +48,9 @@ it) — useful for testing against a scratch copy.
 
 ## What one run does
 
-The report is deliberately just **one table** — no activity-delta alerts, no
-prose suggestion sections, no status line. The table's Status column is the whole
-picture.
+The report is deliberately just **one table** plus a one-line severity tally — no
+activity-delta alerts, no prose suggestion sections. The leading mark column and
+the Status column are the whole picture.
 
 1. **Lists open MRs** assigned to `jdoe` in the `acme` group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
@@ -58,8 +58,24 @@ picture.
 3. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
-4. **Prints one table** — `Task | PR title | PR | Status`, the two groups split
-   by a separator rule when both are present:
+4. **Prints one table** — `⟨mark⟩ | Task | PR title | PR | Status`, sorted so
+   rows needing action come first, with the two groups split by a separator rule
+   when both are present.
+
+   The unlabelled first column is the severity mark, the primary status channel:
+   plain ASCII, so it survives any terminal, font size, or colour vision.
+
+   | Mark | Meaning | Examples |
+   |---|---|---|
+   | `!` | on me now | mergeable + fully approved, need-rebase, conflict, awaiting prod trigger, failed pipeline |
+   | `?` | on me to look at or reply to | requested changes, unresolved discussions, an unrecognised status |
+   | `~` | on someone or something else | not approved, draft, CI running, prod deploying |
+
+   The Status column repeats the same state as a glyph plus a text label. Glyphs
+   are redundant garnish — every distinction is readable from the mark and the
+   label alone.
+
+   The two row groups:
    - **open MRs first**, Status = review state (draft, not-approved, need-rebase,
      conflict, mergeable, fully-approved, …);
    - **merged-but-not-yet-deployed MRs at the bottom**, Status = deploy state
@@ -70,9 +86,13 @@ picture.
      commit carries the earlier ones with it). See
      `latest_prod_shipped_pipeline_id`. These rows are purely informational and
      never affect the tab colour.
-5. **Sets the iTerm2 tab colour** (no printed status line). The colour tracks
-   **only open-PR work** — a fully-approved mergeable MR, a needed rebase, or
-   conflicts. Deployment progress never flips it.
+5. **Prints the severity tally** under the table — `! 1 on you  ~ 7 waiting`,
+   listing only the non-empty buckets. It doubles as the legend for the mark
+   column and as the text equivalent of the tab colour.
+6. **Sets the iTerm2 tab colour**, a convenience duplicate of the tally's `!`
+   bucket. It tracks **only open-PR work** — a fully-approved mergeable MR, a
+   needed rebase, or conflicts. Deployment progress never flips it, and nothing
+   is ever reported by colour alone.
    - **Orange** — something needs me on an open PR.
    - **Green** — all clear.
 

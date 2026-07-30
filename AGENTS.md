@@ -27,13 +27,28 @@ interpretation table in sync.
   (looped variant: `monitor-prs-looped.md`)
 - This Python engine: `monitor_prs.py`
 
-The report is **one table** (`Task | PR title | PR | Status`) — nothing else, no
-status line. Open MRs come first with their review status; merged-but-not-yet-
-deployed MRs sit at the bottom with their deploy status in the same Status column.
-No activity-delta alerts, no prose suggestion sections;
-the skill reads the Status column directly. The merged rows are informational only;
-the skill relays them but never acts on them. If you change the Status labels or
-the columns, update the skill's interpretation table.
+The report is **one table** (`⟨mark⟩ | Task | PR title | PR | Status`) plus a
+one-line severity tally under it — nothing else. Open MRs come first with their
+review status; merged-but-not-yet-deployed MRs sit at the bottom with their
+deploy status in the same Status column. No activity-delta alerts, no prose
+suggestion sections; the skill reads the mark and Status columns directly. The
+merged rows are informational only; the skill relays them but never acts on them.
+If you change the marks, the Status labels, or the columns, update the skill's
+interpretation table.
+
+**Accessibility contract.** The report is read by scanning, and must not rely on
+color, emoji fidelity, or fine glyph detail. So state is encoded three times
+over, weakest channel last:
+
+1. **Severity mark** (`!` on you / `?` to answer / `~` waiting) — plain ASCII,
+   one cell wide, and the table is sorted by it so action rows are always on top.
+   This is the channel that must never regress.
+2. **Text label** (`conflict + not_approved`) — unambiguous on its own.
+3. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
+   two different meanings across the open/deploy halves of the Status column, and
+   never distinguished from another glyph by hue alone.
+
+Adding a state means picking its mark first and its glyph last.
 
 ## Architecture
 
@@ -60,8 +75,9 @@ Single file, stdlib only. Sections in order:
    `run_once` appends to the bottom of the same table. Frontiers (per project)
    and per-MR evaluation both fan out over a `ThreadPoolExecutor`. Purely
    informational — never contributes to `action_needed`.
-7. **iTerm tab colour** — OSC escape codes, emitted once at the very end; the
-   only signal `action_needed` drives (it is not printed).
+7. **iTerm tab colour** — OSC escape codes, emitted once at the very end. It is
+   a convenience duplicate of the tally line's `!` bucket, never the only place a
+   state is reported.
 8. **`run_once` / `main`** — top-level flow and CLI; single check by default,
    `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
    only chrome is one `next tick @ <date HH:MM>` line before each sleep.
@@ -141,9 +157,15 @@ field; `check_deployments` pops it.
   a *later* commit is correctly treated as shipped and dropped, even if its own
   prod job was never triggered. Compare merge-pipeline id ≤ frontier id (`main`
   is linear, so pipeline id order == commit order).
-- **`action_needed` covers open-PR work only** — a fully-approved mergeable MR,
-  a needed rebase, or conflicts. Deployment status must never flip it. It is
-  never printed; it exists solely to pick the tab colour.
+- **`action_needed` covers open-PR work only** — derived as "any open row marked
+  `!`", which is a fully-approved mergeable MR, a needed rebase, or conflicts.
+  Deploy rows carry `!` marks of their own (failed pipeline, awaiting prod
+  trigger) but are excluded from the flag, so deployment status never flips the
+  tab colour.
+- **`has_conflicts` outranks `detailed_merge_status`.** GitLab sets the two
+  independently and reports `not_approved` on MRs that do have conflicts;
+  `fmt_status` rewrites the status to `conflict` so the mark, glyph, and label
+  agree instead of the conflict showing up only as an orange tab.
 - **`🕹️ awaiting prod trigger` is an OSC 8 terminal hyperlink** (`_hyperlink`,
   BEL-terminated) to the project's `/-/commits/main?ref_type=HEADS` page (built
   from the deployment entry's `project_path`) — that page is where the manual
@@ -153,7 +175,7 @@ field; `check_deployments` pops it.
   Keep the label text inside the link unchanged; the skill matches on it.
 - **iTerm colour at the very end**, exactly once, after the table.
 - **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A
-  single-codepoint emoji in the Status column (👀, 🚀, …) is 1 code point but 2
+  single-codepoint emoji in the Status column (👀, ✅, …) is 1 code point but 2
   terminal cells; padding by `len` under-counts it and skews the right border.
 
 ## Testing
