@@ -48,9 +48,9 @@ it) — useful for testing against a scratch copy.
 
 ## What one run does
 
-The report is deliberately just **one table** plus a one-line severity tally — no
-activity-delta alerts, no prose suggestion sections. The leading mark column and
-the Status column are the whole picture.
+The report is deliberately just **one table** — no activity-delta alerts, no
+prose suggestion sections, no status line. The leading mark column and the Status
+column are the whole picture.
 
 1. **Lists open MRs** assigned to `jdoe` in the `acme` group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
@@ -58,7 +58,7 @@ the Status column are the whole picture.
 3. **Detects MRs merged since the last check** (by me, a teammate, or the
    calling LLM) and adds them under `deployments`, pointed at the `main`
    pipeline of their merge commit.
-4. **Prints one table** — `⟨mark⟩ | Task | PR title | PR | Status`, sorted so
+4. **Prints one table** — `⟨mark⟩ | PR title | Task | PR | Status`, sorted so
    rows needing action come first, with a separator rule between each severity
    block and between the two row groups.
 
@@ -91,13 +91,10 @@ the Status column are the whole picture.
      commit carries the earlier ones with it). See
      `latest_prod_shipped_pipeline_id`. These rows are purely informational and
      never affect the tab colour.
-5. **Prints the severity tally** under the table — `! 1 on you  ~ 5 with people
-   . 2 running`, listing only the non-empty buckets. It doubles as the legend for
-   the mark column and as the text equivalent of the tab colour.
-6. **Sets the iTerm2 tab colour**, a convenience duplicate of the tally's `!`
-   bucket. It tracks **only open-PR work** — a fully-approved mergeable MR, a
-   needed rebase, or conflicts. Deployment progress never flips it, and nothing
-   is ever reported by colour alone.
+5. **Sets the iTerm2 tab colour**, a convenience duplicate of the `!` block at
+   the top of the table. It tracks **only open-PR work** — a fully-approved
+   mergeable MR, a needed rebase, or conflicts. Deployment progress never flips
+   it, and nothing is ever reported by colour alone.
    - **Orange** — something needs me on an open PR.
    - **Green** — all clear.
 

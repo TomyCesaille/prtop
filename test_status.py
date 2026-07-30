@@ -14,7 +14,6 @@ from monitor_prs import (
     PEOPLE,
     RUNNING,
     Row,
-    _MARK_LABELS,
     _MARK_ORDER,
     _MERGE_STATUS,
     _by_severity,
@@ -26,8 +25,11 @@ from monitor_prs import (
     open_mr_rows,
     pending_deploy_status,
     status_signal,
-    summary_line,
 )
+
+
+def row(mark, *, pr="`p!1`", status="s", title="title", task="task"):
+    return Row(mark=mark, title=title, task=task, pr=pr, status=status)
 
 
 def mr(merge_status="not_approved", *, approved=False, conflicts=False, title="t", task="task"):
@@ -112,12 +114,12 @@ class AccessibilityContract(unittest.TestCase):
             self.assertEqual(len(mark), 1)
             self.assertTrue(mark.isascii(), mark)
 
-    def test_every_mark_has_a_sort_rank_and_a_tally_label(self):
-        self.assertEqual(set(_MARK_ORDER), {mark for mark, _ in _MARK_LABELS})
-
-    def test_the_tally_orders_buckets_by_severity(self):
-        ranks = [_MARK_ORDER[mark] for mark, _ in _MARK_LABELS]
-        self.assertEqual(ranks, sorted(ranks))
+    def test_every_mark_a_state_can_produce_has_a_sort_rank(self):
+        # An unranked mark falls to the sort fallback and lands below `.`.
+        produced = {status_signal(s, a)[0] for s in _MERGE_STATUS for a in (True, False)}
+        produced |= {status_signal("mergeable", a)[0] for a in (True, False)}
+        produced.add(status_signal("a_status_gitlab_adds_later", False)[0])
+        self.assertLessEqual(produced, set(_MARK_ORDER))
 
     def test_no_state_is_reported_by_glyph_alone(self):
         for status in _MERGE_STATUS:
@@ -158,14 +160,14 @@ class AccessibilityContract(unittest.TestCase):
 
 class Ordering(unittest.TestCase):
     def rows(self, *marks):
-        return [Row(m, "task", "title", f"`p!{i}`", "s") for i, m in enumerate(marks)]
+        return [row(m, pr=f"`p!{i}`") for i, m in enumerate(marks)]
 
     def test_rows_needing_the_user_sort_above_rows_that_do_not(self):
         ordered = _by_severity(self.rows(RUNNING, PEOPLE, ANSWER, ACT))
         self.assertEqual([r.mark for r in ordered], [ACT, ANSWER, PEOPLE, RUNNING])
 
     def test_mr_id_breaks_ties_within_a_severity(self):
-        rows = [Row(ACT, "t", "t", "`b!2`", "s"), Row(ACT, "t", "t", "`a!1`", "s")]
+        rows = [row(ACT, pr="`b!2`"), row(ACT, pr="`a!1`")]
         self.assertEqual([r.pr for r in _by_severity(rows)], ["`a!1`", "`b!2`"])
 
     def test_each_severity_block_is_ruled_off_from_the_next(self):
@@ -192,31 +194,17 @@ class Ordering(unittest.TestCase):
         self.assertEqual(rows[0].pr, "`p!2`")
 
 
-class Tally(unittest.TestCase):
-    def test_the_tally_names_every_non_empty_bucket(self):
-        rows = [Row(ACT, "", "", "`a!1`", ""), Row(RUNNING, "", "", "`a!2`", "")]
-        self.assertEqual(summary_line(rows), "! 1 on you  . 1 running")
-
-    def test_empty_buckets_stay_out_of_the_tally(self):
-        rows = [Row(PEOPLE, "", "", "`a!1`", "")]
-        self.assertEqual(summary_line(rows), "~ 1 with people")
-
-    def test_the_separator_rule_is_not_counted_as_a_row(self):
-        rows = [Row(ACT, "", "", "`a!1`", ""), None, Row(ACT, "", "", "`a!2`", "")]
-        self.assertEqual(summary_line(rows), "! 2 on you")
-
-
 class TableRendering(unittest.TestCase):
     def test_emoji_bearing_rows_keep_the_right_border_aligned(self):
         rows = [
-            Row(ACT, "task", "title", "`p!1`", "✅ mergeable + fully_approved"),
-            Row(RUNNING, "task", "title", "`p!2`", "⏳ ci_still_running"),
+            row(ACT, status="✅ mergeable + fully_approved"),
+            row(RUNNING, pr="`p!2`", status="⏳ ci_still_running"),
         ]
         widths = {_display_width(line) for line in _render_table(HEADERS, rows).splitlines()}
         self.assertEqual(len(widths), 1, "table lines differ in rendered width")
 
     def test_a_hyperlinked_cell_occupies_only_its_visible_width(self):
-        plain = Row(ACT, "task", "title", "`p!1`", "🕹️ awaiting prod trigger")
+        plain = row(ACT, status="🕹️ awaiting prod trigger")
         linked = plain._replace(status=_hyperlink("🕹️ awaiting prod trigger", "https://x.example/y"))
         self.assertEqual(
             _render_table(HEADERS, [plain]).splitlines()[-1],
@@ -227,13 +215,21 @@ class TableRendering(unittest.TestCase):
         )
 
     def test_none_renders_as_the_rule_between_the_two_row_groups(self):
-        rows = [Row(ACT, "t", "t", "`p!1`", "s"), None, Row(RUNNING, "t", "t", "`p!2`", "s")]
+        rows = [row(ACT), None, row(RUNNING, pr="`p!2`")]
         lines = _render_table(HEADERS, rows).splitlines()
         self.assertEqual(lines[1], lines[3])
 
     def test_the_mark_column_header_is_blank(self):
         self.assertEqual(HEADERS[0], "")
         self.assertEqual(len(HEADERS), len(Row._fields))
+
+    def test_the_pr_title_column_comes_before_the_task_column(self):
+        self.assertEqual(HEADERS[1:3], ("PR title", "Task"))
+        self.assertEqual(Row._fields[1:3], ("title", "task"))
+
+    def test_each_cell_lands_under_its_own_header(self):
+        line = _render_table(HEADERS, [row(ACT, title="THE-TITLE", task="THE-TASK")]).splitlines()[-1]
+        self.assertLess(line.index("THE-TITLE"), line.index("THE-TASK"))
 
 
 if __name__ == "__main__":

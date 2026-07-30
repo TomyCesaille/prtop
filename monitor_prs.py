@@ -22,7 +22,6 @@ import subprocess
 import sys
 import time
 import unicodedata
-from collections import Counter
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -134,12 +133,6 @@ PEOPLE = "~"   # on someone else, and it will sit there until a person moves
 RUNNING = "."  # on a machine, and it resolves by itself
 
 _MARK_ORDER = {ACT: 0, ANSWER: 1, PEOPLE: 2, RUNNING: 3}
-_MARK_LABELS = (
-    (ACT, "on you"),
-    (ANSWER, "to answer"),
-    (PEOPLE, "with people"),
-    (RUNNING, "running"),
-)
 
 # Glyphs are a second, redundant channel. A glyph never carries two different
 # meanings across the open-MR and awaiting-deploy halves of the shared Status
@@ -331,13 +324,13 @@ class Row(NamedTuple):
     """One table line. Field order is column order — `HEADERS` labels it."""
 
     mark: str
-    task: str
     title: str
+    task: str
     pr: str
     status: str
 
 
-HEADERS = ("", "Task", "PR title", "PR", "Status")
+HEADERS = ("", "PR title", "Task", "PR", "Status")
 
 
 def _render_table(headers: Sequence[str], rows: Sequence[Row | None]) -> str:
@@ -370,15 +363,6 @@ def _split_by_mark(rows: list[Row]) -> list[Row | None]:
             out.append(None)
         out.append(row)
     return out
-
-
-def summary_line(rows: Sequence[Row | None]) -> str:
-    """Severity tally under the table: the legend for the mark column, and the
-    text twin of the iTerm tab color."""
-    counts = Counter(r.mark for r in rows if r is not None)
-    return "  ".join(
-        f"{mark} {counts[mark]} {label}" for mark, label in _MARK_LABELS if counts[mark]
-    )
 
 
 def open_mr_rows(open_mrs: dict) -> list[Row]:
@@ -586,7 +570,6 @@ def run_once() -> None:
     print()
     if rows:
         print(_render_table(HEADERS, rows))
-        print(summary_line(rows))
     else:
         print("_(no open MRs or pending deploys)_")
 

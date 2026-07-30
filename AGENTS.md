@@ -27,8 +27,8 @@ interpretation table in sync.
   (looped variant: `monitor-prs-looped.md`)
 - This Python engine: `monitor_prs.py`
 
-The report is **one table** (`⟨mark⟩ | Task | PR title | PR | Status`) plus a
-one-line severity tally under it — nothing else. Open MRs come first with their
+The report is **one table** (`⟨mark⟩ | PR title | Task | PR | Status`) — nothing
+else, no tally and no status line. Open MRs come first with their
 review status; merged-but-not-yet-deployed MRs sit at the bottom with their
 deploy status in the same Status column. No activity-delta alerts, no prose
 suggestion sections; the skill reads the mark and Status columns directly. The
@@ -91,8 +91,8 @@ Single file, stdlib only. Sections in order:
    and per-MR evaluation both fan out over a `ThreadPoolExecutor`. Purely
    informational — never contributes to `action_needed`.
 7. **iTerm tab colour** — OSC escape codes, emitted once at the very end. It is
-   a convenience duplicate of the tally line's `!` bucket, never the only place a
-   state is reported.
+   a convenience duplicate of the `!` block at the top of the table, never the
+   only place a state is reported.
 8. **`run_once` / `main`** — top-level flow and CLI; single check by default,
    `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
    only chrome is one `next tick @ <date HH:MM>` line before each sleep.
@@ -200,7 +200,7 @@ python3 test_status.py
 ```
 
 `test_status.py` covers the pure layer — severity marks, deploy signals, the
-accessibility contract, ordering, the tally, and table rendering. Stdlib
+accessibility contract, ordering, and table rendering. Stdlib
 `unittest`, no network, no state file. Run it after any change to marks, glyphs,
 status labels, or the table; add a case alongside each new state.
 
