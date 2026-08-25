@@ -30,6 +30,7 @@ from monitor_prs import (
     open_mr_rows,
     pending_deploy_status,
     status_signal,
+    unresolved_threads_await_user,
 )
 
 
@@ -56,14 +57,24 @@ def all_status_cells():
             yield pending_deploy_status(pipeline_status, jobs, {"project_path": "p"})[1]
 
 
-def mr(merge_status="not_approved", *, approved=False, conflicts=False, title="t", task="task"):
+def mr(merge_status="not_approved", *, approved=False, conflicts=False, title="t", task="task",
+       threads_await_user=True):
     return {
         "merge_status": merge_status,
         "fully_approved": approved,
         "has_conflicts": conflicts,
+        "threads_await_user": threads_await_user,
         "title": title,
         "task_name": task,
     }
+
+
+def thread(*authors, resolved=False):
+    """A resolvable discussion, written by `authors` in order."""
+    return {"notes": [
+        {"author": {"username": a}, "resolvable": True, "resolved": resolved}
+        for a in authors
+    ]}
 
 
 class SeverityMarks(unittest.TestCase):
@@ -102,6 +113,60 @@ class SeverityMarks(unittest.TestCase):
     def test_every_other_state_spells_out_the_approval_beside_it(self):
         self.assertEqual(fmt_status("mergeable", True, False)[1], "✅ mergeable, approved")
         self.assertEqual(fmt_status("ci_still_running", False, False)[1], "⏳ CI running, unapproved")
+
+
+class OwnThreads(unittest.TestCase):
+    """A thread the user opened on his own MR is a hint for the reviewer. GitLab
+    blocks the merge on it all the same, so it stays in the report — but not as
+    feedback waiting on him."""
+
+    def test_a_thread_only_the_user_wrote_in_leaves_the_mr_with_the_reviewers(self):
+        self.assertEqual(
+            fmt_status("discussions_not_resolved", False, False, False),
+            (PEOPLE, "👀 awaiting review"),
+        )
+
+    def test_his_own_threads_are_his_to_clear_once_the_mr_is_approved(self):
+        mark, cell = fmt_status("discussions_not_resolved", True, False, False)
+        self.assertEqual(mark, ACT)
+        self.assertIn("resolve own threads", cell)
+
+    def test_a_note_from_anyone_else_makes_the_thread_feedback_to_answer(self):
+        mark, cell = fmt_status("discussions_not_resolved", False, False, True)
+        self.assertEqual(mark, ANSWER)
+        self.assertIn("unresolved threads", cell)
+
+    def test_conflicts_outrank_his_own_threads_too(self):
+        self.assertEqual(fmt_status("discussions_not_resolved", False, True, False)[0], ACT)
+
+    def test_a_thread_the_user_opened_and_nobody_answered_waits_on_no_reply(self):
+        self.assertFalse(unresolved_threads_await_user([thread("jdoe")]))
+
+    def test_a_reviewer_replying_in_his_thread_turns_it_into_feedback(self):
+        self.assertTrue(unresolved_threads_await_user([thread("jdoe", "alice42")]))
+
+    def test_a_thread_a_reviewer_opened_waits_on_his_reply(self):
+        self.assertTrue(unresolved_threads_await_user([thread("bobsmith")]))
+
+    def test_a_resolved_reviewer_thread_is_behind_him(self):
+        self.assertFalse(unresolved_threads_await_user([thread("alice42", resolved=True)]))
+
+    def test_one_reviewer_thread_among_his_own_is_enough(self):
+        discussions = [thread("jdoe"), thread("jdoe"), thread("carol7")]
+        self.assertTrue(unresolved_threads_await_user(discussions))
+
+    def test_a_plain_comment_is_not_a_thread_to_resolve(self):
+        comment = {"individual_note": True, "notes": [
+            {"author": {"username": "alice42"}, "resolvable": False},
+        ]}
+        self.assertFalse(unresolved_threads_await_user([comment]))
+
+    def test_gitlabs_own_system_notes_never_make_a_thread_await_him(self):
+        own = thread("jdoe")
+        own["notes"].append(
+            {"author": {"username": "gitlab-bot"}, "system": True, "resolvable": False}
+        )
+        self.assertFalse(unresolved_threads_await_user([own]))
 
 
 class TaskNames(unittest.TestCase):

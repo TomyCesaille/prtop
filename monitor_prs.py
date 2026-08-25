@@ -125,6 +125,22 @@ def mr_short_id(project_path: str, iid: int) -> str:
     return f"{project_path.rsplit('/', 1)[-1]}!{iid}"
 
 
+def unresolved_threads_await_user(discussions: list[dict]) -> bool:
+    """Whether an unresolved thread carries a note from anyone but the user.
+
+    A thread he opened on his own MR and nobody answered is a hint he left for
+    the reviewer; GitLab counts it unresolved all the same. One note from someone
+    else in the thread makes it feedback he has to answer.
+    """
+    for discussion in discussions:
+        notes = [n for n in discussion.get("notes") or [] if not n.get("system")]
+        if not any(n.get("resolvable") and not n.get("resolved") for n in notes):
+            continue
+        if any((n.get("author") or {}).get("username") != GITLAB_USERNAME for n in notes):
+            return True
+    return False
+
+
 # The severity mark is the primary status channel: plain ASCII, one column wide,
 # and legible regardless of color, glyph rendering, or font size. Rows sort by
 # it, so whatever is on the user sits at the top of the table. The four marks also
@@ -156,6 +172,9 @@ _MERGE_STATUS = {
     "checking":                 (RUNNING, "🔍", "merge check running"),
     "unchecked":                (RUNNING, "🔍", "merge check pending"),
     "discussions_not_resolved": (ANSWER, "💬", "unresolved threads"),
+    # Not one of GitLab's statuses: `fmt_status` substitutes it when every
+    # unresolved thread is one the user opened and nobody answered.
+    "own_threads_unresolved":   (ACT, "🧵", "resolve own threads"),
     "blocked_status":           (PEOPLE, "🚧", "blocked"),
     "requested_changes":        (ANSWER, "⛔", "changes requested"),
 }
@@ -173,13 +192,23 @@ def status_signal(merge_status: str, fully_approved: bool) -> tuple[str, str, st
     return _MERGE_STATUS.get(merge_status, (ANSWER, "❔", merge_status))
 
 
-def fmt_status(merge_status: str, fully_approved: bool, has_conflicts: bool) -> tuple[str, str]:
+def fmt_status(
+    merge_status: str,
+    fully_approved: bool,
+    has_conflicts: bool,
+    threads_await_user: bool = True,
+) -> tuple[str, str]:
     """(severity mark, Status cell) for an open MR."""
     # GitLab sets `has_conflicts` independently of `detailed_merge_status`, which
     # can still read `not_approved` on a conflicting MR. Conflicts win: they are
     # on the user whatever the review state says.
     if has_conflicts:
         merge_status = "conflict"
+    elif merge_status == "discussions_not_resolved" and not threads_await_user:
+        # A thread the user opened and nobody answered is a hint he left for the
+        # reviewer. It blocks the merge once the MR is approved; before that,
+        # the review is what the MR actually waits on.
+        merge_status = "own_threads_unresolved" if fully_approved else "not_approved"
     mark, glyph, label = status_signal(merge_status, fully_approved)
     if merge_status not in _APPROVAL_IMPLIED:
         label += ", approved" if fully_approved else ", unapproved"
@@ -195,6 +224,19 @@ def fetch_open_mr_summaries() -> list[dict]:
     )
     data = glab_api(path)
     return data if isinstance(data, list) else []
+
+
+def fetch_discussions(base: str) -> list[dict]:
+    """Every discussion on the MR, up to ten pages — a CodeRabbit-reviewed MR
+    runs past one, and a single reviewer thread anywhere in them decides the
+    status."""
+    out: list[dict] = []
+    for page in range(1, 11):
+        batch = glab_api(f"{base}/discussions?per_page=100&page={page}") or []
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+    return out
 
 
 def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
@@ -214,6 +256,12 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
     ]
     approvers = [u for u in approvers if u]
 
+    merge_status = full.get("detailed_merge_status", "unknown")
+    # The extra call earns its place only when threads are what blocks the merge.
+    threads_await_user = True
+    if merge_status == "discussions_not_resolved":
+        threads_await_user = unresolved_threads_await_user(fetch_discussions(base))
+
     info = {
         "title": full.get("title", ""),
         "task_name": extract_task_name(full.get("source_branch")),
@@ -222,7 +270,8 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
         "approvals": approvers,
         "fully_approved": bool(approvals.get("approved")),
         "has_conflicts": bool(full.get("has_conflicts")),
-        "merge_status": full.get("detailed_merge_status", "unknown"),
+        "merge_status": merge_status,
+        "threads_await_user": threads_await_user,
         "project_path": project_path,
         "iid": iid,
         "web_url": full.get("web_url"),
@@ -397,7 +446,8 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
     rows = []
     for mr_id, info in open_mrs.items():
         mark, status = fmt_status(
-            info["merge_status"], info["fully_approved"], info["has_conflicts"]
+            info["merge_status"], info["fully_approved"], info["has_conflicts"],
+            info["threads_await_user"],
         )
         rows.append(Row(
             mark=mark,

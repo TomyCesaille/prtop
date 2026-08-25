@@ -80,7 +80,8 @@ Single file, stdlib only. Sections in order:
    `glab_api` is GET-only by design — keep it that way.
 3. **State I/O** — `load_state` / `save_state`. Atomic write via `.json.tmp`.
 4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list),
-   `fetch_mr_detail` (per-MR hydration, two API calls), `gather_all_mrs`
+   `fetch_mr_detail` (per-MR hydration, two API calls, plus `fetch_discussions`
+   on an MR whose threads block the merge), `gather_all_mrs`
    (ThreadPoolExecutor fan-out across MRs).
 5. **Track merges** — `track_vanished_mrs` resolves MRs that left the open list;
    a merged one gets a `deployments` entry pointing at its merge-commit main
@@ -109,7 +110,8 @@ Single file, stdlib only. Sections in order:
 {
   "open_mrs":    { "<project>!<iid>": { title, task_name, note_count, state,
                                         approvals[], fully_approved, has_conflicts,
-                                        merge_status, project_path, iid, web_url,
+                                        merge_status, threads_await_user,
+                                        project_path, iid, web_url,
                                         last_checked } },
   "deployments": { "<project>!<iid>": { title, task_name, project (url-encoded),
                                         project_path, pipeline_id, pipeline_status,
@@ -154,6 +156,16 @@ field; `check_deployments` pops it.
 - GitLab recomputes `has_conflicts`/`detailed_merge_status` lazily — a
   conflict can show up with `merge_status` still `not_approved`, which is why
   `action_needed` checks `has_conflicts` independently of `merge_status`.
+- **`detailed_merge_status` names one blocker**, so `discussions_not_resolved`
+  hides the approval state — which is why the report keeps reading it from
+  `/approvals` and appending it as `, approved` / `, unapproved`.
+- `/merge_requests/<iid>/discussions` is where thread state lives: resolvability
+  and resolution are per *note* (`resolvable`, `resolved`), a thread is
+  unresolved when any of its notes is, and plain comments come back as
+  `individual_note` discussions whose notes aren't resolvable. It paginates —
+  `fetch_discussions` walks up to ten pages, because a CodeRabbit-reviewed MR
+  runs past one and a single reviewer thread anywhere in them decides the
+  status.
 
 ## Behavioural rules to preserve
 
@@ -181,6 +193,15 @@ field; `check_deployments` pops it.
   Deploy rows carry `!` marks of their own (failed pipeline, awaiting prod
   trigger) but are excluded from the flag, so deployment status never flips the
   tab colour.
+- **The user's own unresolved threads are hints, not feedback.** A thread he
+  opened on his own MR that nobody answered is something he left for the
+  reviewer, so `? 💬 unresolved threads` would put his own note back on his
+  plate. `unresolved_threads_await_user` decides it — one note from anyone else
+  in an unresolved thread makes the whole MR feedback to answer again — and
+  `fmt_status` swaps the status for `not_approved` while the review is still
+  outstanding, or for the synthetic `own_threads_unresolved`
+  (`! 🧵 resolve own threads`) once the MR is approved and those threads are all
+  that blocks the merge.
 - **`has_conflicts` outranks `detailed_merge_status`.** GitLab sets the two
   independently and reports `not_approved` on MRs that do have conflicts;
   `fmt_status` rewrites the status to `conflict` so the mark, glyph, and label

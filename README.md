@@ -67,8 +67,8 @@ column are the whole picture.
 
    | Mark | Meaning | Examples |
    |---|---|---|
-   | `!` | on me now | mergeable and approved, rebase needed, conflicts, awaiting prod trigger, failed pipeline |
-   | `?` | on me to look at or reply to | requested changes, unresolved discussions, an unrecognised status |
+   | `!` | on me now | mergeable and approved, rebase needed, conflicts, my own threads left to resolve, awaiting prod trigger, failed pipeline |
+   | `?` | on me to look at or reply to | requested changes, a reviewer's unresolved threads, an unrecognised status |
    | `~` | on someone else, until a person moves | not approved, draft, blocked by another MR |
    | `.` | on a machine, resolves by itself | CI running, mergeability being computed, prod deploying |
 
@@ -118,6 +118,7 @@ table keeps a fixed width and never wraps in the terminal.
       "fully_approved": false,
       "has_conflicts": false,
       "merge_status": "not_approved",
+      "threads_await_user": true,  // false when every unresolved thread is mine alone
       "project_path": "acme/common/frontend",
       "iid": 1659,
       "web_url": "https://gitlab.com/.../merge_requests/1659",
@@ -155,5 +156,10 @@ Safe to delete — the next run will recreate it with a fresh baseline.
   new comment or a partial approval that doesn't move the Status label, since
   those aren't shown. `note_count`/`approvals` are still recorded in the state
   file for anything that wants finer-grained detection.
+- An unresolved thread I opened myself, with nobody else writing in it, is a
+  hint left for the reviewer rather than feedback waiting on me. Such an MR
+  reports as `awaiting review`, or as `resolve own threads` once it is approved
+  and those threads are the only thing GitLab still blocks the merge on. One
+  note from anyone else in the thread makes it `unresolved threads` again.
 - The script does **not** post Slack messages or open browsers; it just prints
   to stdout and colours the iTerm tab.
