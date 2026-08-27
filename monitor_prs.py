@@ -363,31 +363,35 @@ def _hyperlink(text: str, url: str) -> str:
     return f"\033]8;;{url}\a{text}\033]8;;\a"
 
 
+def _plain(text: str) -> str:
+    """A cell stripped of its hyperlink escapes — the text the terminal shows."""
+    return _OSC_RE.sub("", text)
+
+
 def _display_width(text: str) -> int:
     """Terminal cell width: OSC escape sequences (hyperlinks) occupy no cells,
     and East-Asian-wide chars (incl. emoji) count as 2 so the emoji-bearing
     Status column stays aligned. `str.ljust` can't do either — it counts a
     single-codepoint emoji as 1 while the terminal renders it 2 cells wide."""
-    text = _OSC_RE.sub("", text)
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in _plain(text))
 
 
 def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def _linked_title(entry: dict, mr_id: str) -> str:
-    """The MR title, clickable through to the MR page. A deployment entry carries
-    no `web_url`, so its URL is built from the project path and the number after
-    the `!` in the MR id."""
-    title = _truncate(entry.get("title") or "", TITLE_MAX)
+def _linked_mr_id(entry: dict, mr_id: str) -> str:
+    """The `repo!iid` cell, clickable through to the MR page. A deployment entry
+    carries no `web_url`, so its URL is built from the project path and the
+    number after the `!` in the MR id."""
+    cell = f"`{mr_id}`"
     project_path = entry.get("project_path")
     url = entry.get("web_url") or (
         f"https://gitlab.com/{project_path}/-/merge_requests/{mr_id.partition('!')[2]}"
         if project_path
         else ""
     )
-    return _hyperlink(title, url) if url else title
+    return _hyperlink(cell, url) if url else cell
 
 
 class Row(NamedTuple):
@@ -437,7 +441,7 @@ def _render_table(
 def _sort_key(row: Row) -> tuple[int, str, str, int]:
     """Severity first, then task, repo and MR number — so the several MRs of one
     task stay adjacent inside a severity block, in repo then numeric order."""
-    repo, _, iid = row.pr.strip("`").partition("!")
+    repo, _, iid = _plain(row.pr).strip("`").partition("!")
     return _MARK_ORDER.get(row.mark, 9), row.task, repo, int(iid)
 
 
@@ -466,8 +470,8 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
         rows.append(Row(
             mark=mark,
             task=_truncate(info.get("task_name") or "—", TASK_MAX),
-            title=_linked_title(info, mr_id),
-            pr=f"`{mr_id}`",
+            title=_truncate(info["title"], TITLE_MAX),
+            pr=_linked_mr_id(info, mr_id),
             status=status,
         ))
     return _by_severity(rows)
@@ -567,8 +571,8 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
     row = Row(
         mark=mark,
         task=_truncate(dep.get("task_name") or "—", TASK_MAX),
-        title=_linked_title(dep, mr_id),
-        pr=f"`{mr_id}`",
+        title=_truncate(dep.get("title", ""), TITLE_MAX),
+        pr=_linked_mr_id(dep, mr_id),
         status=deploy_status,
     )
     return mr_id, False, row

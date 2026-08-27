@@ -17,14 +17,14 @@ from monitor_prs import (
     PROD_DEPLOYING,
     RUNNING,
     STATUS_WIDTH,
-    TITLE_MAX,
     Row,
     _MARK_ORDER,
     _MERGE_STATUS,
     _by_severity,
     _display_width,
     _hyperlink,
-    _linked_title,
+    _linked_mr_id,
+    _plain,
     _render_table,
     _split_by_mark,
     extract_task_name,
@@ -330,29 +330,32 @@ class Ordering(unittest.TestCase):
         self.assertEqual(rows[0].pr, "`p!2`")
 
 
-class LinkedTitles(unittest.TestCase):
-    def test_the_pr_title_opens_the_merge_request(self):
+class LinkedMrIds(unittest.TestCase):
+    def test_the_pr_cell_opens_the_merge_request(self):
         self.assertEqual(
-            _linked_title({"title": "fix: a thing", "web_url": "https://x.example/mr/7"}, "p!7"),
-            _hyperlink("fix: a thing", "https://x.example/mr/7"),
+            _linked_mr_id({"web_url": "https://x.example/mr/7"}, "p!7"),
+            _hyperlink("`p!7`", "https://x.example/mr/7"),
         )
 
-    def test_a_pending_deploy_title_opens_the_merge_request_it_shipped(self):
-        entry = {"title": "fix: a thing", "project_path": "acme/common/frontend"}
+    def test_a_pending_deploy_opens_the_merge_request_it_shipped(self):
+        entry = {"project_path": "acme/common/frontend"}
         self.assertEqual(
-            _linked_title(entry, "frontend!1817"),
+            _linked_mr_id(entry, "frontend!1817"),
             _hyperlink(
-                "fix: a thing",
+                "`frontend!1817`",
                 "https://gitlab.com/acme/common/frontend/-/merge_requests/1817",
             ),
         )
 
-    def test_a_title_with_nowhere_to_point_stays_plain_text(self):
-        self.assertEqual(_linked_title({"title": "fix: a thing"}, "p!7"), "fix: a thing")
+    def test_a_cell_with_nowhere_to_point_stays_plain_text(self):
+        self.assertEqual(_linked_mr_id({}, "p!7"), "`p!7`")
 
-    def test_a_long_title_is_truncated_inside_the_link(self):
-        linked = _linked_title({"title": "x" * 80, "web_url": "https://x.example/mr/7"}, "p!7")
-        self.assertEqual(_display_width(linked), TITLE_MAX)
+    def test_a_linked_cell_still_sorts_by_repo_and_mr_number(self):
+        linked = [
+            row(ACT, pr=_linked_mr_id({"web_url": "u"}, "frontend!999")),
+            row(ACT, pr=_linked_mr_id({"web_url": "u"}, "frontend!17")),
+        ]
+        self.assertEqual([_plain(r.pr) for r in _by_severity(linked)], ["`frontend!17`", "`frontend!999`"])
 
 
 class TableRendering(unittest.TestCase):

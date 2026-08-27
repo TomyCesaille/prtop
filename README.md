@@ -65,8 +65,8 @@ column are the whole picture.
    The unlabelled first column is the severity mark, the primary status channel:
    plain ASCII, so it survives any terminal, font size, or colour vision.
 
-   The PR title is a terminal hyperlink to the merge request (cmd+click in
-   iTerm2).
+   The PR cell (`repo!iid`) is a terminal hyperlink to the merge request
+   (cmd+click in iTerm2).
 
    | Mark | Meaning | Examples |
    |---|---|---|
