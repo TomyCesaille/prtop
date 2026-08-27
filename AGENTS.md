@@ -206,6 +206,10 @@ field; `check_deployments` pops it.
   independently and reports `not_approved` on MRs that do have conflicts;
   `fmt_status` rewrites the status to `conflict` so the mark, glyph, and label
   agree instead of the conflict showing up only as an orange tab.
+- **The PR title cell is an OSC 8 terminal hyperlink** (`_linked_title`) to the
+  merge request: `web_url` for an open MR, rebuilt from `project_path` and the
+  number in the MR id for a pending deploy. The title is truncated to
+  `TITLE_MAX` before the link wraps it, so the padding stays right.
 - **`🕹️ awaiting prod trigger` is an OSC 8 terminal hyperlink** (`_hyperlink`,
   BEL-terminated) to the project's `/-/commits/main?ref_type=HEADS` page (built
   from the deployment entry's `project_path`) — that page is where the manual

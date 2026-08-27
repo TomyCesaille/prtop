@@ -17,12 +17,14 @@ from monitor_prs import (
     PROD_DEPLOYING,
     RUNNING,
     STATUS_WIDTH,
+    TITLE_MAX,
     Row,
     _MARK_ORDER,
     _MERGE_STATUS,
     _by_severity,
     _display_width,
     _hyperlink,
+    _linked_title,
     _render_table,
     _split_by_mark,
     extract_task_name,
@@ -326,6 +328,31 @@ class Ordering(unittest.TestCase):
         })
         self.assertEqual([r.mark for r in rows], [ACT, ANSWER, PEOPLE])
         self.assertEqual(rows[0].pr, "`p!2`")
+
+
+class LinkedTitles(unittest.TestCase):
+    def test_the_pr_title_opens_the_merge_request(self):
+        self.assertEqual(
+            _linked_title({"title": "fix: a thing", "web_url": "https://x.example/mr/7"}, "p!7"),
+            _hyperlink("fix: a thing", "https://x.example/mr/7"),
+        )
+
+    def test_a_pending_deploy_title_opens_the_merge_request_it_shipped(self):
+        entry = {"title": "fix: a thing", "project_path": "acme/common/frontend"}
+        self.assertEqual(
+            _linked_title(entry, "frontend!1817"),
+            _hyperlink(
+                "fix: a thing",
+                "https://gitlab.com/acme/common/frontend/-/merge_requests/1817",
+            ),
+        )
+
+    def test_a_title_with_nowhere_to_point_stays_plain_text(self):
+        self.assertEqual(_linked_title({"title": "fix: a thing"}, "p!7"), "fix: a thing")
+
+    def test_a_long_title_is_truncated_inside_the_link(self):
+        linked = _linked_title({"title": "x" * 80, "web_url": "https://x.example/mr/7"}, "p!7")
+        self.assertEqual(_display_width(linked), TITLE_MAX)
 
 
 class TableRendering(unittest.TestCase):

@@ -376,6 +376,20 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def _linked_title(entry: dict, mr_id: str) -> str:
+    """The MR title, clickable through to the MR page. A deployment entry carries
+    no `web_url`, so its URL is built from the project path and the number after
+    the `!` in the MR id."""
+    title = _truncate(entry.get("title") or "", TITLE_MAX)
+    project_path = entry.get("project_path")
+    url = entry.get("web_url") or (
+        f"https://gitlab.com/{project_path}/-/merge_requests/{mr_id.partition('!')[2]}"
+        if project_path
+        else ""
+    )
+    return _hyperlink(title, url) if url else title
+
+
 class Row(NamedTuple):
     """One table line. Field order is column order — `HEADERS` labels it."""
 
@@ -452,7 +466,7 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
         rows.append(Row(
             mark=mark,
             task=_truncate(info.get("task_name") or "—", TASK_MAX),
-            title=_truncate(info["title"], TITLE_MAX),
+            title=_linked_title(info, mr_id),
             pr=f"`{mr_id}`",
             status=status,
         ))
@@ -553,7 +567,7 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
     row = Row(
         mark=mark,
         task=_truncate(dep.get("task_name") or "—", TASK_MAX),
-        title=_truncate(dep.get("title", ""), TITLE_MAX),
+        title=_linked_title(dep, mr_id),
         pr=f"`{mr_id}`",
         status=deploy_status,
     )
