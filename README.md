@@ -35,8 +35,13 @@ so far (`portal-backend`, `portal-frontend`) — rather than the
 `acme` root. A repo mid-migration has the same MR open on both sides, and
 a root-level scope would report it twice. Widen the group as more repos land.
 
-An instance being unreachable fails the whole run rather than yielding a partial
-table: a report silently missing one instance's MRs reads as "all clear".
+An instance that doesn't answer never blanks the other's MRs, and is never
+silent about it either: it gets a row of its own at the top of the table
+(`! ⚠️ instance unreachable`, titled with the hostname) and turns the tab orange,
+because green would be claiming all-clear over MRs the run never saw. The `glab`
+error goes to stderr, keeping the report one table. Its MRs stay in the state
+file though they're not shown — that's the merge-detection baseline, so one
+merging mid-outage is still caught on the next run.
 
 ## Usage
 

@@ -36,8 +36,10 @@ from monitor_prs import (
     open_mr_rows,
     pending_deploy_status,
     status_signal,
+    unreachable_rows,
     unresolved_threads_await_user,
 )
+from monitor_prs import HostFailure
 
 SELF_HOSTED = "gitlab.example.com"
 
@@ -55,6 +57,7 @@ JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manu
 def all_status_cells():
     """Every Status cell the open and awaiting-deploy tables can produce, bar the
     ones carrying free text (an unmapped merge status, a `check failed:` error)."""
+    yield unreachable_rows([HostFailure("h", "e")])[0].status
     for merge_status in (*_MERGE_STATUS, "mergeable"):
         for approved in (False, True):
             yield fmt_status(merge_status, approved, False)[1]
@@ -238,6 +241,39 @@ class MultipleInstances(unittest.TestCase):
         self.assertEqual(_plain(open_mr_rows({key: entry})[0].pr), "`portal-frontend!170`")
 
 
+class UnreachableInstance(unittest.TestCase):
+    """One instance failing never blanks the other's MRs, and is never silent."""
+
+    def failure(self, host=SELF_HOSTED):
+        return unreachable_rows([HostFailure(host, "dial tcp: i/o timeout")])[0]
+
+    def test_an_instance_that_did_not_answer_gets_a_row_naming_it(self):
+        row = self.failure()
+        self.assertEqual(row.title, SELF_HOSTED)
+        self.assertIn("unreachable", row.status)
+
+    def test_an_unread_instance_is_on_the_user_so_the_tab_cannot_claim_all_clear(self):
+        self.assertEqual(self.failure().mark, ACT)
+
+    def test_the_glab_error_stays_out_of_the_table(self):
+        self.assertNotIn("i/o timeout", "".join(self.failure()))
+
+    def test_it_leads_the_table_over_the_mrs_the_run_could_read(self):
+        rows = _by_severity([self.failure(), *open_mr_rows({"p!1": mr("mergeable")})])
+        self.assertEqual(rows[0].title, SELF_HOSTED)
+
+    def test_a_row_with_no_mr_number_still_sorts(self):
+        rows = _by_severity([row(ACT, pr="`frontend!7`"), self.failure()])
+        self.assertEqual(len(rows), 2)
+
+    def test_each_silent_instance_is_named_on_its_own_row(self):
+        rows = unreachable_rows([HostFailure("a.example", "x"), HostFailure("b.example", "y")])
+        self.assertEqual([r.title for r in rows], ["a.example", "b.example"])
+
+    def test_no_failure_puts_no_row_in_the_table(self):
+        self.assertEqual(unreachable_rows([]), [])
+
+
 class DeploySignals(unittest.TestCase):
     def dep(self):
         return {"project_path": "acme/common/frontend"}
@@ -319,11 +355,15 @@ class AccessibilityContract(unittest.TestCase):
             if glyph:
                 by_glyph.setdefault(glyph[0], set()).add(f"deploy:{pipeline_status}")
 
+        by_glyph.setdefault("⚠", set()).add("unreachable_instance")
         shared = {g: s for g, s in by_glyph.items() if len(s) > 1}
         expected = {
             "⏳": {"ci_still_running", "ci_must_pass", "deploy:running"},
             "🔍": {"checking", "unchecked"},
             "👀": {"not_approved"},
+            # One meaning, two scopes: the monitor got no answer. `check failed`
+            # is a single deployment's call, this is a whole instance.
+            "⚠": {"unreachable_instance", "deploy:check_failed"},
         }
         for glyph, states in shared.items():
             self.assertEqual(states, expected.get(glyph, set()), f"{glyph} means too many things")

@@ -130,10 +130,24 @@ HOSTS = (
   Without it `glab` resolves the host from the git repo the working directory
   sits in, so a run started from inside a migrated checkout would query the
   wrong instance.
-- **An unreachable instance fails the whole run.** `gather_all_mrs` lets the
-  `GlabError` propagate rather than returning what the other host gave: a table
-  silently missing one instance's MRs reads as "all clear", which is worse than
-  a visible failure. The error text names the host (it carries the full command).
+- **An unreachable instance degrades, it doesn't blank the run.**
+  `gather_host_mrs` catches `GlabError` around both the listing and its MRs'
+  hydration (an instance can drop between the two), so one host failing leaves
+  the other's rows intact. Three rules hold the honesty:
+  - `unreachable_rows` gives each silent host a row marked **`!`**, titled with
+    the hostname, status `⚠️ instance unreachable`. `!` rather than `?` because
+    it feeds `action_needed`: a green tab claims all-clear, which the run cannot
+    claim over MRs it never saw.
+  - The `glab` error goes to **stderr**, never the table — the report stays one
+    table, and `watch_prs.sh` still captures it via `2>&1`.
+  - `run_once` **carries the failed host's previous `open_mrs` entries into the
+    saved state** but not into the rows. They are the merge-detection baseline:
+    dropping them would lose an MR that merges mid-outage, and rendering them
+    would report a status the run could not confirm. `track_vanished_mrs` then
+    sees them as still-present and can't read the outage as a wave of merges.
+  `check_deployments` follows the same shape: a frontier lookup that fails falls
+  back to `None`, so evaluation drops to the MR's own pipeline and reports
+  `⚠️ check failed` on that row alone.
 - **Every URL is built from the entry's `host`**, never a `gitlab.com` literal —
   the PR-cell hyperlink (`_linked_mr_id`) and the awaiting-prod-trigger commits
   link (`pending_deploy_status`).

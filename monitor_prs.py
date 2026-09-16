@@ -274,11 +274,11 @@ def fetch_discussions(host: str, base: str) -> list[dict]:
     return out
 
 
-def fetch_mr_detail(item: tuple[Host, dict]) -> tuple[str, dict] | None:
+def fetch_mr_detail(item: tuple[Host, dict]) -> tuple[str, dict | None]:
     host, mr_summary = item
     project_path = project_path_from_summary(mr_summary)
     if not project_path:
-        return None
+        return "", None
     iid = mr_summary["iid"]
     encoded = quote(project_path, safe="")
     base = f"projects/{encoded}/merge_requests/{iid}"
@@ -322,22 +322,47 @@ def fetch_mr_detail(item: tuple[Host, dict]) -> tuple[str, dict] | None:
     return mr_key(host.name, project_path, iid), info
 
 
-def gather_all_mrs() -> dict[str, dict]:
-    # An instance being unreachable raises rather than yielding a partial list:
-    # a report silently missing one host's MRs reads as "all clear".
+
+class HostFailure(NamedTuple):
+    """An instance this run could not read, and what `glab` said."""
+
+    host: str
+    error: str
+
+
+def gather_host_mrs(host: Host) -> tuple[dict[str, dict], str | None]:
+    """Every open MR on one instance, or the error that stopped the attempt.
+
+    Listing and hydration are both inside the guard: an instance can go down
+    between the two, and either way the answer for this host is "unknown".
+    """
+    try:
+        summaries = fetch_open_mr_summaries(host)
+        if not summaries:
+            return {}, None
+        with ThreadPoolExecutor(max_workers=min(8, len(summaries))) as pool:
+            results = list(pool.map(fetch_mr_detail, summaries))
+    except GlabError as e:
+        return {}, str(e)
+    return {key: info for key, info in results if info is not None}, None
+
+
+def gather_all_mrs() -> tuple[dict[str, dict], list[HostFailure]]:
+    """Open MRs across every instance, and the instances that did not answer.
+
+    One instance failing never blanks the other's MRs, but it is never silent
+    either: `run_once` gives each failure a row of its own.
+    """
     with ThreadPoolExecutor(max_workers=len(HOSTS)) as pool:
-        summaries = [item for batch in pool.map(fetch_open_mr_summaries, HOSTS) for item in batch]
-    if not summaries:
-        return {}
+        results = list(pool.map(gather_host_mrs, HOSTS))
+
     out: dict[str, dict] = {}
-    workers = min(8, len(summaries))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for result in pool.map(fetch_mr_detail, summaries):
-            if result is None:
-                continue
-            short_id, info = result
-            out[short_id] = info
-    return out
+    failures: list[HostFailure] = []
+    for host, (mrs, error) in zip(HOSTS, results):
+        out.update(mrs)
+        if error is not None:
+            failures.append(HostFailure(host.name, error))
+    return out, failures
 
 
 def strip_volatile(open_mrs: dict) -> dict:
@@ -491,7 +516,8 @@ def _sort_key(row: Row) -> tuple[int, str, str, int]:
     """Severity first, then task, repo and MR number — so the several MRs of one
     task stay adjacent inside a severity block, in repo then numeric order."""
     repo, _, iid = _plain(row.pr).strip("`").partition("!")
-    return _MARK_ORDER.get(row.mark, 9), row.task, repo, int(iid)
+    # An unreachable-instance row carries no MR number.
+    return _MARK_ORDER.get(row.mark, 9), row.task, repo, int(iid) if iid.isdigit() else 0
 
 
 def _by_severity(rows: list[Row]) -> list[Row]:
@@ -524,6 +550,17 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
             status=status,
         ))
     return _by_severity(rows)
+def unreachable_rows(failures: Sequence[HostFailure]) -> list[Row]:
+    """One row per instance this run could not read.
+
+    Marked `!` rather than `?`: the run has nothing to say about that instance,
+    and it feeds `action_needed`, because a green tab claims "all clear" — a
+    claim the run cannot make about MRs it never saw.
+    """
+    return [
+        Row(mark=ACT, title=f.host, task="—", pr="—", status="⚠️ instance unreachable")
+        for f in failures
+    ]
 
 
 # ---------- Deployments ----------
@@ -650,10 +687,16 @@ def check_deployments(state: dict) -> list[Row]:
     projects = sorted({
         (dep.get("host", DEFAULT_HOST.name), dep["project"]) for dep in deployments.values()
     })
+    def frontier(target: tuple[str, str]) -> int | None:
+        # No frontier is the safe answer: evaluation falls through to the MR's
+        # own pipeline, which reports its own failure as a `check failed` row.
+        try:
+            return latest_prod_shipped_pipeline_id(*target)
+        except GlabError:
+            return None
+
     with ThreadPoolExecutor(max_workers=min(8, len(projects))) as pool:
-        frontiers = dict(zip(
-            projects, pool.map(lambda p: latest_prod_shipped_pipeline_id(*p), projects)
-        ))
+        frontiers = dict(zip(projects, pool.map(frontier, projects)))
 
     items = [
         (key, dep, frontiers.get((dep.get("host", DEFAULT_HOST.name), dep["project"])))
@@ -710,13 +753,28 @@ def run_once() -> None:
     state = load_state()
     previous_mrs = state.get("open_mrs") or {}
 
-    open_mrs = gather_all_mrs()
+    confirmed, failures = gather_all_mrs()
+    for failure in failures:
+        print(f"glab error ({failure.host}): {failure.error}", file=sys.stderr)
+
+    # An unreachable instance's MRs are unknown this run, not gone. Holding on to
+    # the previous entries keeps the merge-detection baseline — an MR that merges
+    # during the outage is still caught on the next run — and stops
+    # `track_vanished_mrs` from reading the outage as a wave of merges. They stay
+    # out of the table: a status this run could not confirm is not one to report.
+    unreachable = {f.host for f in failures}
+    known = dict(confirmed)
+    for key, info in previous_mrs.items():
+        if info.get("host", DEFAULT_HOST.name) in unreachable:
+            known.setdefault(key, info)
+
     # Populates deployment tracking for anything merged since last check; its
     # result isn't printed — the tables are the whole report.
-    track_vanished_mrs(open_mrs, previous_mrs, state)
+    track_vanished_mrs(known, previous_mrs, state)
 
-    state["open_mrs"] = strip_volatile(open_mrs)
-    open_rows = open_mr_rows(open_mrs)
+    state["open_mrs"] = strip_volatile(known)
+    # Two already-sorted lists merged into one severity order.
+    open_rows = _by_severity([*unreachable_rows(failures), *open_mr_rows(confirmed)])
     deploy_rows = check_deployments(state)
     # Open MRs on top, merged-but-not-yet-deployed at the bottom (deploy status
     # in the same Status column), with a separator rule between the two groups
@@ -733,10 +791,12 @@ def run_once() -> None:
     else:
         print("_(no open MRs or pending deploys)_")
 
-    # Action needed tracks only what's on me for an open PR — merge, rebase, or
-    # resolve conflicts. Deployment progress is reported above but never flips
-    # this flag. Reflects persistent state, not just transitions: an MR that has
-    # been fully-approved-and-mergeable for several cycles is still on me.
+    # Action needed tracks what's on me for an open PR — merge, rebase, resolve
+    # conflicts — plus an instance the run could not read, since green would
+    # otherwise claim all-clear over MRs nobody saw. Deployment progress is
+    # reported above but never flips this flag. Reflects persistent state, not
+    # just transitions: an MR that has been fully-approved-and-mergeable for
+    # several cycles is still on me.
     action_needed = any(row.mark == ACT for row in open_rows)
 
     save_state(state)
