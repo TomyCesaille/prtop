@@ -14,8 +14,29 @@ State lives in `~/.claude/pr-monitor-state.json`.
 ## Requirements
 
 - Python 3.10+ (stdlib only — no `pip install` needed)
-- [`glab`](https://gitlab.com/gitlab-org/cli) authenticated as `jdoe`
+- [`glab`](https://gitlab.com/gitlab-org/cli) authenticated on **both** GitLab
+  instances — `gitlab.com` as `jdoe`, `gitlab.example.com` as
+  `john.doe` (`glab auth status` lists them)
 - macOS iTerm2 (optional; tab colour and the table's hyperlinks use OSC escape codes that other terminals ignore)
+
+## The two instances
+
+The company is migrating repo by repo from gitlab.com to the self-hosted
+`gitlab.example.com`, so both carry live MRs. `HOSTS` in `monitor_prs.py` names
+each one with the user's handle there and the group to list:
+
+| Instance | Handle | Group listed |
+|---|---|---|
+| `gitlab.com` | `jdoe` | `acme` |
+| `gitlab.example.com` | `john.doe` | `acme/portal` |
+
+The self-hosted scope is the `portal` subgroup — the repos that have moved
+so far (`portal-backend`, `portal-frontend`) — rather than the
+`acme` root. A repo mid-migration has the same MR open on both sides, and
+a root-level scope would report it twice. Widen the group as more repos land.
+
+An instance being unreachable fails the whole run rather than yielding a partial
+table: a report silently missing one instance's MRs reads as "all clear".
 
 ## Usage
 
@@ -52,7 +73,7 @@ The report is deliberately just **one table** — no activity-delta alerts, no
 prose suggestion sections, no status line. The leading mark column and the Status
 column are the whole picture.
 
-1. **Lists open MRs** assigned to `jdoe` in the `acme` group (incl. subgroups).
+1. **Lists open MRs** assigned to the user in each instance's group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
    (calls run in parallel across MRs).
 3. **Detects MRs merged since the last check** (by me, a teammate, or the
@@ -66,7 +87,8 @@ column are the whole picture.
    plain ASCII, so it survives any terminal, font size, or colour vision.
 
    The PR cell (`repo!iid`) is a terminal hyperlink to the merge request
-   (cmd+click in iTerm2).
+   (cmd+click in iTerm2), pointing at whichever instance the MR lives on. The
+   cell never names the instance — the link carries it.
 
    | Mark | Meaning | Examples |
    |---|---|---|
@@ -109,10 +131,14 @@ table keeps a fixed width and never wraps in the terminal.
 
 `~/.claude/pr-monitor-state.json`
 
+Keys are `<host>:<repo>!<iid>`. The host prefix is what keeps the two instances
+apart while a repo lives on both — `docs!1410` exists on each. The `repo!iid`
+the table shows is stored separately as `short_id`.
+
 ```jsonc
 {
   "open_mrs": {
-    "frontend!1659": {
+    "gitlab.com:frontend!1659": {
       "title": "...",
       "task_name": "...",       // derived from the dev/<slug>-<hash> branch
       "note_count": 3,
@@ -122,6 +148,8 @@ table keeps a fixed width and never wraps in the terminal.
       "has_conflicts": false,
       "merge_status": "not_approved",
       "threads_await_user": true,  // false when every unresolved thread is mine alone
+      "host": "gitlab.com",         // which instance; `glab api --hostname` takes it
+      "short_id": "frontend!1659",  // what the PR column shows
       "project_path": "acme/common/frontend",
       "iid": 1659,
       "web_url": "https://gitlab.com/.../merge_requests/1659",
@@ -129,14 +157,18 @@ table keeps a fixed width and never wraps in the terminal.
     }
   },
   "deployments": {
-    "portal-frontend!47": {
+    "gitlab.example.com:portal-frontend!47": {
       "title": "...",
       "task_name": "...",
+      "host": "gitlab.example.com",
+      "short_id": "portal-frontend!47",
       "project": "acme%2Fportal%2Fportal-frontend",
       "project_path": "acme/portal/portal-frontend",
+      "iid": 47,
+      "web_url": "https://gitlab.example.com/.../merge_requests/47",
       "pipeline_id": 12345,
       "pipeline_status": "success",
-      "pipeline_url": "https://gitlab.com/.../pipelines/12345",
+      "pipeline_url": "https://gitlab.example.com/.../pipelines/12345",
       "prod_job_id": 67890
     }
   },
@@ -150,9 +182,11 @@ Safe to delete — the next run will recreate it with a fresh baseline.
 
 - On the very first run the previous state is empty, so nothing merged is
   detected — it just records a baseline and prints the table.
-- `project_path`/`iid` in `open_mrs` are what allow a later run to recognise a
-  vanished MR as merged and start tracking its deployment. Entries written by
-  older versions lack them; those MRs are silently skipped for deploy tracking.
+- `host`/`project_path`/`iid` in `open_mrs` are what allow a later run to
+  recognise a vanished MR as merged and start tracking its deployment. Entries
+  written by older versions lack `project_path`/`iid`; those MRs are silently
+  skipped for deploy tracking. An entry without `host` is read as `gitlab.com`,
+  so state written before the second instance existed still resolves.
 - Because the report is table-only, the watcher wakes on anything visible in the
   table — a Status change (approval-to-full, rebase needed, conflict, mergeable),
   a merge, a new/removed MR, or deployment progress. It no longer wakes on a bare

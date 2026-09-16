@@ -10,7 +10,9 @@ import unittest
 from monitor_prs import (
     ACT,
     ANSWER,
+    DEFAULT_HOST,
     HEADERS,
+    HOSTS,
     MIN_WIDTHS,
     PEOPLE,
     PIPELINE_INFLIGHT,
@@ -29,11 +31,15 @@ from monitor_prs import (
     _split_by_mark,
     extract_task_name,
     fmt_status,
+    mr_key,
+    mr_short_id,
     open_mr_rows,
     pending_deploy_status,
     status_signal,
     unresolved_threads_await_user,
 )
+
+SELF_HOSTED = "gitlab.example.com"
 
 
 def row(mark, *, pr="`p!1`", status="s", title="title", task="task"):
@@ -122,6 +128,9 @@ class OwnThreads(unittest.TestCase):
     blocks the merge on it all the same, so it stays in the report — but not as
     feedback waiting on him."""
 
+    def awaits(self, discussions, username="jdoe"):
+        return unresolved_threads_await_user(discussions, username)
+
     def test_a_thread_only_the_user_wrote_in_leaves_the_mr_with_the_reviewers(self):
         self.assertEqual(
             fmt_status("discussions_not_resolved", False, False, False),
@@ -142,33 +151,39 @@ class OwnThreads(unittest.TestCase):
         self.assertEqual(fmt_status("discussions_not_resolved", False, True, False)[0], ACT)
 
     def test_a_thread_the_user_opened_and_nobody_answered_waits_on_no_reply(self):
-        self.assertFalse(unresolved_threads_await_user([thread("jdoe")]))
+        self.assertFalse(self.awaits([thread("jdoe")]))
 
     def test_a_reviewer_replying_in_his_thread_turns_it_into_feedback(self):
-        self.assertTrue(unresolved_threads_await_user([thread("jdoe", "alice42")]))
+        self.assertTrue(self.awaits([thread("jdoe", "alice42")]))
 
     def test_a_thread_a_reviewer_opened_waits_on_his_reply(self):
-        self.assertTrue(unresolved_threads_await_user([thread("bobsmith")]))
+        self.assertTrue(self.awaits([thread("bobsmith")]))
 
     def test_a_resolved_reviewer_thread_is_behind_him(self):
-        self.assertFalse(unresolved_threads_await_user([thread("alice42", resolved=True)]))
+        self.assertFalse(self.awaits([thread("alice42", resolved=True)]))
 
     def test_one_reviewer_thread_among_his_own_is_enough(self):
         discussions = [thread("jdoe"), thread("jdoe"), thread("carol7")]
-        self.assertTrue(unresolved_threads_await_user(discussions))
+        self.assertTrue(self.awaits(discussions))
 
     def test_a_plain_comment_is_not_a_thread_to_resolve(self):
         comment = {"individual_note": True, "notes": [
             {"author": {"username": "alice42"}, "resolvable": False},
         ]}
-        self.assertFalse(unresolved_threads_await_user([comment]))
+        self.assertFalse(self.awaits([comment]))
 
     def test_gitlabs_own_system_notes_never_make_a_thread_await_him(self):
         own = thread("jdoe")
         own["notes"].append(
             {"author": {"username": "gitlab-bot"}, "system": True, "resolvable": False}
         )
-        self.assertFalse(unresolved_threads_await_user([own]))
+        self.assertFalse(self.awaits([own]))
+
+    def test_his_handle_on_the_self_hosted_instance_is_read_as_his_own(self):
+        own = thread("john.doe")
+        self.assertFalse(self.awaits([own], "john.doe"))
+        # The gitlab.com handle would make his own note read as a reviewer's.
+        self.assertTrue(self.awaits([own], "jdoe"))
 
 
 class TaskNames(unittest.TestCase):
@@ -197,6 +212,32 @@ class TaskNames(unittest.TestCase):
         self.assertEqual(extract_task_name(None), "")
 
 
+class MultipleInstances(unittest.TestCase):
+    """Repos migrate from gitlab.com to the self-hosted instance one at a time,
+    so a repo can be live on both at once."""
+
+    def test_each_instance_is_listed_once_under_the_users_handle_there(self):
+        self.assertEqual(len({h.name for h in HOSTS}), len(HOSTS))
+        self.assertEqual(DEFAULT_HOST.name, "gitlab.com")
+
+    def test_a_repo_open_on_both_instances_gets_a_key_of_its_own_on_each(self):
+        old = mr_key("gitlab.com", "acme/portal/portal-frontend", 170)
+        new = mr_key(SELF_HOSTED, "acme/portal/portal-frontend", 170)
+        self.assertNotEqual(old, new)
+
+    def test_the_table_names_the_mr_without_the_instance_it_lives_on(self):
+        self.assertEqual(
+            mr_short_id("acme/portal/portal-frontend", 170),
+            "portal-frontend!170",
+        )
+
+    def test_a_row_reads_as_the_mr_number_rather_than_its_state_key(self):
+        key = mr_key(SELF_HOSTED, "acme/portal/portal-frontend", 170)
+        entry = mr("mergeable", approved=True)
+        entry |= {"host": SELF_HOSTED, "short_id": "portal-frontend!170"}
+        self.assertEqual(_plain(open_mr_rows({key: entry})[0].pr), "`portal-frontend!170`")
+
+
 class DeploySignals(unittest.TestCase):
     def dep(self):
         return {"project_path": "acme/common/frontend"}
@@ -220,6 +261,15 @@ class DeploySignals(unittest.TestCase):
         jobs = [{"name": "deploy_production", "status": "manual", "id": 7}]
         cell = pending_deploy_status("success", jobs, self.dep())[1]
         self.assertIn("https://gitlab.com/acme/common/frontend/-/commits/main", cell)
+
+    def test_a_migrated_project_links_to_the_instance_it_now_lives_on(self):
+        dep = {"host": SELF_HOSTED, "project_path": "acme/portal/portal-frontend"}
+        jobs = [{"name": "deploy_production", "status": "manual", "id": 7}]
+        cell = pending_deploy_status("success", jobs, dep)[1]
+        self.assertIn(
+            f"https://{SELF_HOSTED}/acme/portal/portal-frontend/-/commits/main",
+            cell,
+        )
 
     def test_the_production_job_id_is_recorded_for_the_skill_to_trigger(self):
         dep = self.dep()
@@ -344,6 +394,17 @@ class LinkedMrIds(unittest.TestCase):
             _hyperlink(
                 "`frontend!1817`",
                 "https://gitlab.com/acme/common/frontend/-/merge_requests/1817",
+            ),
+        )
+
+    def test_a_rebuilt_url_points_at_the_instance_the_mr_lives_on(self):
+        entry = {"host": SELF_HOSTED, "project_path": "acme/portal/portal-backend"}
+        self.assertEqual(
+            _linked_mr_id(entry, "portal-backend!12"),
+            _hyperlink(
+                "`portal-backend!12`",
+                f"https://{SELF_HOSTED}/acme/portal/portal-backend"
+                "/-/merge_requests/12",
             ),
         )
 

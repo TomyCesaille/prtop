@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Report on GitLab MRs assigned to jdoe and their deployment pipelines.
+Report on the GitLab MRs assigned to the user and their deployment pipelines.
+
+Covers both instances the company runs — gitlab.com and the self-hosted
+gitlab.example.com the repos are migrating to (see `HOSTS`).
 
 Data-gathering engine behind the /monitor-prs Claude Code skill.
 
@@ -32,8 +35,30 @@ from urllib.parse import quote
 
 # ---------- Configuration ----------
 
-GITLAB_USERNAME = "jdoe"
-GITLAB_GROUP = "acme"
+
+class Host(NamedTuple):
+    """A GitLab instance, and who the user is on it.
+
+    `group` is the root group the MR list is taken from; the group endpoint
+    covers its subgroups.
+    """
+
+    name: str
+    username: str
+    group: str
+
+
+# Repos are moving from gitlab.com to the self-hosted instance one at a time, so
+# both are live. The self-hosted scope is the subgroup holding the repos that
+# have already moved, not the `acme` root: a repo mid-migration has an open
+# MR on each side, and a root-level scope would report that MR twice. Widen it as
+# more repos land.
+HOSTS = (
+    Host("gitlab.com", "jdoe", "acme"),
+    Host("gitlab.example.com", "john.doe", "acme/portal"),
+)
+DEFAULT_HOST = HOSTS[0]
+
 TRIGRAM = "dev"
 STATE_FILE = Path(
     os.environ.get("PR_MONITOR_STATE_FILE")
@@ -79,8 +104,10 @@ def _run(cmd: list[str]) -> str:
     return res.stdout
 
 
-def glab_api(path: str) -> Any:
-    out = _run(["glab", "api", path])
+def glab_api(host: str, path: str) -> Any:
+    # `--hostname` is passed even for gitlab.com: without it `glab` resolves the
+    # host from the git repo the working directory happens to sit in.
+    out = _run(["glab", "api", "--hostname", host, path])
     return json.loads(out) if out.strip() else None
 
 
@@ -122,21 +149,29 @@ def project_path_from_summary(mr_summary: dict) -> str | None:
 
 
 def mr_short_id(project_path: str, iid: int) -> str:
+    """The `repo!iid` the table shows."""
     return f"{project_path.rsplit('/', 1)[-1]}!{iid}"
 
 
-def unresolved_threads_await_user(discussions: list[dict]) -> bool:
+def mr_key(host: str, project_path: str, iid: int) -> str:
+    """State-file key. The short id alone is ambiguous while a repo is
+    mid-migration and carries the same MR number on both instances."""
+    return f"{host}:{mr_short_id(project_path, iid)}"
+
+
+def unresolved_threads_await_user(discussions: list[dict], username: str) -> bool:
     """Whether an unresolved thread carries a note from anyone but the user.
 
     A thread he opened on his own MR and nobody answered is a hint he left for
     the reviewer; GitLab counts it unresolved all the same. One note from someone
-    else in the thread makes it feedback he has to answer.
+    else in the thread makes it feedback he has to answer. `username` is his
+    handle on the instance the MR lives on — it differs between the two.
     """
     for discussion in discussions:
         notes = [n for n in discussion.get("notes") or [] if not n.get("system")]
         if not any(n.get("resolvable") and not n.get("resolved") for n in notes):
             continue
-        if any((n.get("author") or {}).get("username") != GITLAB_USERNAME for n in notes):
+        if any((n.get("author") or {}).get("username") != username for n in notes):
             return True
     return False
 
@@ -217,29 +252,30 @@ def fmt_status(
 
 # ---------- Fetch & gather ----------
 
-def fetch_open_mr_summaries() -> list[dict]:
+def fetch_open_mr_summaries(host: Host) -> list[tuple[Host, dict]]:
     path = (
-        f"groups/{GITLAB_GROUP}/merge_requests"
-        f"?assignee_username={GITLAB_USERNAME}&state=opened&per_page=100"
+        f"groups/{quote(host.group, safe='')}/merge_requests"
+        f"?assignee_username={host.username}&state=opened&per_page=100"
     )
-    data = glab_api(path)
-    return data if isinstance(data, list) else []
+    data = glab_api(host.name, path)
+    return [(host, mr) for mr in data] if isinstance(data, list) else []
 
 
-def fetch_discussions(base: str) -> list[dict]:
+def fetch_discussions(host: str, base: str) -> list[dict]:
     """Every discussion on the MR, up to ten pages — a CodeRabbit-reviewed MR
     runs past one, and a single reviewer thread anywhere in them decides the
     status."""
     out: list[dict] = []
     for page in range(1, 11):
-        batch = glab_api(f"{base}/discussions?per_page=100&page={page}") or []
+        batch = glab_api(host, f"{base}/discussions?per_page=100&page={page}") or []
         out.extend(batch)
         if len(batch) < 100:
             break
     return out
 
 
-def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
+def fetch_mr_detail(item: tuple[Host, dict]) -> tuple[str, dict] | None:
+    host, mr_summary = item
     project_path = project_path_from_summary(mr_summary)
     if not project_path:
         return None
@@ -247,8 +283,8 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
     encoded = quote(project_path, safe="")
     base = f"projects/{encoded}/merge_requests/{iid}"
 
-    full = glab_api(base)
-    approvals = glab_api(f"{base}/approvals")
+    full = glab_api(host.name, base)
+    approvals = glab_api(host.name, f"{base}/approvals")
 
     approvers = [
         (a.get("user") or {}).get("username")
@@ -260,7 +296,9 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
     # The extra call earns its place only when threads are what blocks the merge.
     threads_await_user = True
     if merge_status == "discussions_not_resolved":
-        threads_await_user = unresolved_threads_await_user(fetch_discussions(base))
+        threads_await_user = unresolved_threads_await_user(
+            fetch_discussions(host.name, base), host.username
+        )
 
     info = {
         "title": full.get("title", ""),
@@ -272,6 +310,8 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
         "has_conflicts": bool(full.get("has_conflicts")),
         "merge_status": merge_status,
         "threads_await_user": threads_await_user,
+        "host": host.name,
+        "short_id": mr_short_id(project_path, iid),
         "project_path": project_path,
         "iid": iid,
         "web_url": full.get("web_url"),
@@ -279,11 +319,14 @@ def fetch_mr_detail(mr_summary: dict) -> tuple[str, dict] | None:
         # Transient (stripped before save):
         "_project_encoded": encoded,
     }
-    return mr_short_id(project_path, iid), info
+    return mr_key(host.name, project_path, iid), info
 
 
 def gather_all_mrs() -> dict[str, dict]:
-    summaries = fetch_open_mr_summaries()
+    # An instance being unreachable raises rather than yielding a partial list:
+    # a report silently missing one host's MRs reads as "all clear".
+    with ThreadPoolExecutor(max_workers=len(HOSTS)) as pool:
+        summaries = [item for batch in pool.map(fetch_open_mr_summaries, HOSTS) for item in batch]
     if not summaries:
         return {}
     out: dict[str, dict] = {}
@@ -320,9 +363,10 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
         if not project_path or not iid:
             continue
 
+        host = prev.get("host", DEFAULT_HOST.name)
         encoded = quote(project_path, safe="")
         try:
-            full = glab_api(f"projects/{encoded}/merge_requests/{iid}") or {}
+            full = glab_api(host, f"projects/{encoded}/merge_requests/{iid}") or {}
         except GlabError:
             continue
 
@@ -330,9 +374,9 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
             continue
 
         sha = full.get("merge_commit_sha") or full.get("squash_commit_sha") or full.get("sha")
-        pipeline = find_main_pipeline_for_sha(encoded, sha)
+        pipeline = find_main_pipeline_for_sha(host, encoded, sha)
         if pipeline is None:
-            pipelines = glab_api(f"projects/{encoded}/pipelines?ref=main&per_page=5") or []
+            pipelines = glab_api(host, f"projects/{encoded}/pipelines?ref=main&per_page=5") or []
             pipeline = pipelines[0] if pipelines else None
         if pipeline is None:
             continue
@@ -340,8 +384,12 @@ def track_vanished_mrs(current: dict, previous: dict, state: dict) -> None:
         deployments[mr_id] = {
             "title": prev.get("title", ""),
             "task_name": prev.get("task_name", ""),
+            "host": host,
+            "short_id": prev.get("short_id") or mr_id,
             "project": encoded,
             "project_path": project_path,
+            "iid": iid,
+            "web_url": prev.get("web_url"),
             "pipeline_id": pipeline["id"],
             "pipeline_status": pipeline.get("status"),
             "pipeline_url": pipeline.get("web_url"),
@@ -380,14 +428,15 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
-def _linked_mr_id(entry: dict, mr_id: str) -> str:
-    """The `repo!iid` cell, clickable through to the MR page. A deployment entry
-    carries no `web_url`, so its URL is built from the project path and the
-    number after the `!` in the MR id."""
-    cell = f"`{mr_id}`"
+def _linked_mr_id(entry: dict, short_id: str) -> str:
+    """The `repo!iid` cell, clickable through to the MR page. An entry written
+    before `web_url` was recorded has its URL rebuilt from the host, the project
+    path and the number after the `!` in the short id."""
+    cell = f"`{short_id}`"
     project_path = entry.get("project_path")
     url = entry.get("web_url") or (
-        f"https://gitlab.com/{project_path}/-/merge_requests/{mr_id.partition('!')[2]}"
+        f"https://{entry.get('host', DEFAULT_HOST.name)}/{project_path}"
+        f"/-/merge_requests/{short_id.partition('!')[2]}"
         if project_path
         else ""
     )
@@ -462,7 +511,7 @@ def _split_by_mark(rows: list[Row]) -> list[Row | None]:
 
 def open_mr_rows(open_mrs: dict) -> list[Row]:
     rows = []
-    for mr_id, info in open_mrs.items():
+    for key, info in open_mrs.items():
         mark, status = fmt_status(
             info["merge_status"], info["fully_approved"], info["has_conflicts"],
             info["threads_await_user"],
@@ -471,7 +520,7 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
             mark=mark,
             task=_truncate(info.get("task_name") or "—", TASK_MAX),
             title=_truncate(info["title"], TITLE_MAX),
-            pr=_linked_mr_id(info, mr_id),
+            pr=_linked_mr_id(info, info.get("short_id") or key),
             status=status,
         ))
     return _by_severity(rows)
@@ -479,11 +528,13 @@ def open_mr_rows(open_mrs: dict) -> list[Row]:
 
 # ---------- Deployments ----------
 
-def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries: int = 3) -> dict | None:
+def find_main_pipeline_for_sha(
+    host: str, encoded_project: str, sha: str | None, *, retries: int = 3
+) -> dict | None:
     if not sha:
         return None
     for attempt in range(retries):
-        pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=10") or []
+        pipelines = glab_api(host, f"projects/{encoded_project}/pipelines?ref=main&per_page=10") or []
         for p in pipelines:
             if p.get("sha") == sha:
                 return p
@@ -492,8 +543,8 @@ def find_main_pipeline_for_sha(encoded_project: str, sha: str | None, *, retries
     return None
 
 
-def pipeline_jobs(encoded_project: str, pipeline_id: int) -> list[dict]:
-    return glab_api(f"projects/{encoded_project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
+def pipeline_jobs(host: str, encoded_project: str, pipeline_id: int) -> list[dict]:
+    return glab_api(host, f"projects/{encoded_project}/pipelines/{pipeline_id}/jobs?per_page=100") or []
 
 
 def primary_prod_jobs(jobs: list[dict]) -> list[dict]:
@@ -511,16 +562,16 @@ def shipped_prod(jobs: list[dict]) -> bool:
     return "success" in statuses and statuses <= {"success", "skipped"}
 
 
-def latest_prod_shipped_pipeline_id(encoded_project: str) -> int | None:
+def latest_prod_shipped_pipeline_id(host: str, encoded_project: str) -> int | None:
     """Highest `main` pipeline id whose primary production deploy succeeded.
 
     Because `main` is linear, any commit merged at or before that pipeline is
     live in production — a later commit shipping carries the earlier ones with
     it. Returns None when no recent pipeline has shipped prod (or the project
     has no prod deploy job at all)."""
-    pipelines = glab_api(f"projects/{encoded_project}/pipelines?ref=main&per_page=20") or []
+    pipelines = glab_api(host, f"projects/{encoded_project}/pipelines?ref=main&per_page=20") or []
     for p in sorted(pipelines, key=lambda x: x["id"], reverse=True):
-        if shipped_prod(pipeline_jobs(encoded_project, p["id"])):
+        if shipped_prod(pipeline_jobs(host, encoded_project, p["id"])):
             return p["id"]
     return None
 
@@ -543,27 +594,31 @@ def pending_deploy_status(pipeline_status: str, jobs: list[dict], dep: dict) -> 
     if statuses & PROD_DEPLOYING:
         return RUNNING, "📦 prod deploying"
     if statuses & {"manual", "created", "skipped"}:
-        commits_url = f"https://gitlab.com/{dep['project_path']}/-/commits/main?ref_type=HEADS"
+        commits_url = (
+            f"https://{dep.get('host', DEFAULT_HOST.name)}/{dep['project_path']}"
+            f"/-/commits/main?ref_type=HEADS"
+        )
         return ACT, _hyperlink("🕹️ awaiting prod trigger", commits_url)
     return ANSWER, "➖ prod " + ", ".join(sorted(s for s in statuses if s))
 
 
 def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool, Row | None]:
-    """Returns (mr_id, is_in_production, table_row_or_None)."""
-    mr_id, dep, frontier = item
+    """Returns (state key, is_in_production, table_row_or_None)."""
+    key, dep, frontier = item
     dep.pop("stage", None)  # legacy field from the interactive era
+    host = dep.get("host", DEFAULT_HOST.name)
     project = dep["project"]
     pipeline_id = dep["pipeline_id"]
     try:
         if frontier is not None and pipeline_id <= frontier:
-            return mr_id, True, None
-        pipeline = glab_api(f"projects/{project}/pipelines/{pipeline_id}") or {}
+            return key, True, None
+        pipeline = glab_api(host, f"projects/{project}/pipelines/{pipeline_id}") or {}
         status = pipeline.get("status")
         dep["pipeline_status"] = status
-        jobs = pipeline_jobs(project, pipeline_id)
+        jobs = pipeline_jobs(host, project, pipeline_id)
         # Safety net for a prod deploy that fell outside the frontier's window.
         if shipped_prod(jobs):
-            return mr_id, True, None
+            return key, True, None
         mark, deploy_status = pending_deploy_status(status, jobs, dep)
     except GlabError as e:
         mark, deploy_status = ANSWER, f"⚠️ check failed: {e}"
@@ -572,10 +627,10 @@ def _evaluate_deployment(item: tuple[str, dict, int | None]) -> tuple[str, bool,
         mark=mark,
         task=_truncate(dep.get("task_name") or "—", TASK_MAX),
         title=_truncate(dep.get("title", ""), TITLE_MAX),
-        pr=_linked_mr_id(dep, mr_id),
+        pr=_linked_mr_id(dep, dep.get("short_id") or key),
         status=deploy_status,
     )
-    return mr_id, False, row
+    return key, False, row
 
 
 def check_deployments(state: dict) -> list[Row]:
@@ -590,22 +645,31 @@ def check_deployments(state: dict) -> list[Row]:
     if not deployments:
         return []
 
-    projects = sorted({dep["project"] for dep in deployments.values()})
+    # A project is identified by (host, path): the same repo exists on both
+    # instances mid-migration, with pipeline ids that share no sequence.
+    projects = sorted({
+        (dep.get("host", DEFAULT_HOST.name), dep["project"]) for dep in deployments.values()
+    })
     with ThreadPoolExecutor(max_workers=min(8, len(projects))) as pool:
-        frontiers = dict(zip(projects, pool.map(latest_prod_shipped_pipeline_id, projects)))
+        frontiers = dict(zip(
+            projects, pool.map(lambda p: latest_prod_shipped_pipeline_id(*p), projects)
+        ))
 
-    items = [(mr_id, dep, frontiers.get(dep["project"])) for mr_id, dep in deployments.items()]
+    items = [
+        (key, dep, frontiers.get((dep.get("host", DEFAULT_HOST.name), dep["project"])))
+        for key, dep in deployments.items()
+    ]
     pending: list[Row] = []
     to_remove: list[str] = []
     with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
-        for mr_id, in_prod, row in pool.map(_evaluate_deployment, items):
+        for key, in_prod, row in pool.map(_evaluate_deployment, items):
             if in_prod:
-                to_remove.append(mr_id)
+                to_remove.append(key)
             elif row is not None:
                 pending.append(row)
 
-    for mr_id in to_remove:
-        deployments.pop(mr_id, None)
+    for key in to_remove:
+        deployments.pop(key, None)
 
     return _by_severity(pending)
 

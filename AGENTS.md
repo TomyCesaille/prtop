@@ -73,16 +73,18 @@ picks up a second meaning.
 
 Single file, stdlib only. Sections in order:
 
-1. **Configuration constants** (`GITLAB_USERNAME`, `GITLAB_GROUP`, `TRIGRAM`,
+1. **Configuration constants** (`HOSTS`, `DEFAULT_HOST`, `TRIGRAM`,
    `STATE_FILE`, regexes).
 2. **`_run` / `glab_api`** — subprocess wrappers around `glab api`. All GitLab
    calls go through `glab_api`; never construct HTTP requests directly.
-   `glab_api` is GET-only by design — keep it that way.
+   `glab_api` is GET-only by design — keep it that way. Its first argument is
+   the hostname and is never optional (see **Two GitLab instances**).
 3. **State I/O** — `load_state` / `save_state`. Atomic write via `.json.tmp`.
-4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list),
-   `fetch_mr_detail` (per-MR hydration, two API calls, plus `fetch_discussions`
-   on an MR whose threads block the merge), `gather_all_mrs`
-   (ThreadPoolExecutor fan-out across MRs).
+4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list for one
+   `Host`, tagging each summary with it), `fetch_mr_detail` (per-MR hydration,
+   two API calls, plus `fetch_discussions` on an MR whose threads block the
+   merge), `gather_all_mrs` (ThreadPoolExecutor fan-out, first across hosts,
+   then across the pooled MRs).
 5. **Track merges** — `track_vanished_mrs` resolves MRs that left the open list;
    a merged one gets a `deployments` entry pointing at its merge-commit main
    pipeline (pure side effect, no output). `open_mr_rows` builds the open-MR
@@ -102,32 +104,80 @@ Single file, stdlib only. Sections in order:
    `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
    only chrome is one `next tick @ <date HH:MM>` line before each sleep.
 
+## Two GitLab instances
+
+The company is migrating repo by repo from gitlab.com to the self-hosted
+`gitlab.example.com`, so both carry live MRs. `HOSTS` is the whole config:
+
+```python
+HOSTS = (
+    Host("gitlab.com", "jdoe", "acme"),
+    Host("gitlab.example.com", "john.doe", "acme/portal"),
+)
+```
+
+- **The self-hosted scope is a subgroup, not the `acme` root**, and that is
+  deliberate. A repo mid-migration is open on both sides with the same MR number
+  — `docs!1410` is live on each right now — and a root-level scope would put
+  it in the table twice. `portal` holds exactly the repos that have moved
+  (`portal-backend`, `portal-frontend`). Widen the group as more
+  land; don't reach for the root to save the edit.
+- **The user's handle differs per instance** (`jdoe` vs `john.doe`),
+  so it lives on the `Host`, not in a module constant.
+  `unresolved_threads_await_user` takes it as an argument — reading the wrong
+  one turns his own hint threads back into feedback awaiting him.
+- **`--hostname` is passed on every `glab api` call, gitlab.com included.**
+  Without it `glab` resolves the host from the git repo the working directory
+  sits in, so a run started from inside a migrated checkout would query the
+  wrong instance.
+- **An unreachable instance fails the whole run.** `gather_all_mrs` lets the
+  `GlabError` propagate rather than returning what the other host gave: a table
+  silently missing one instance's MRs reads as "all clear", which is worse than
+  a visible failure. The error text names the host (it carries the full command).
+- **Every URL is built from the entry's `host`**, never a `gitlab.com` literal —
+  the PR-cell hyperlink (`_linked_mr_id`) and the awaiting-prod-trigger commits
+  link (`pending_deploy_status`).
+- **Pipeline ids share no sequence across instances**, so the production frontier
+  is keyed on `(host, project)`, not project alone.
+
 ## State schema
 
 `~/.claude/pr-monitor-state.json`
 
 ```jsonc
 {
-  "open_mrs":    { "<project>!<iid>": { title, task_name, note_count, state,
+  "open_mrs":    { "<host>:<repo>!<iid>": { title, task_name, note_count, state,
                                         approvals[], fully_approved, has_conflicts,
                                         merge_status, threads_await_user,
-                                        project_path, iid, web_url,
-                                        last_checked } },
-  "deployments": { "<project>!<iid>": { title, task_name, project (url-encoded),
-                                        project_path, pipeline_id, pipeline_status,
+                                        host, short_id, project_path, iid,
+                                        web_url, last_checked } },
+  "deployments": { "<host>:<repo>!<iid>": { title, task_name, host, short_id,
+                                        project (url-encoded), project_path, iid,
+                                        web_url, pipeline_id, pipeline_status,
                                         pipeline_url, prod_job_id? } },
   "last_checked": "<iso>"
 }
 ```
 
-`project_path`/`iid` in `open_mrs` are what let `track_vanished_mrs` recognise
-a vanished MR as merged. Legacy deployment entries may still carry a `stage`
+The key carries the host because `<repo>!<iid>` alone collides while a repo is
+open on both instances. `short_id` is that bare `<repo>!<iid>` — what the PR
+column shows; rendering reads the field rather than parsing the key.
+`host`/`project_path`/`iid` in `open_mrs` are what let `track_vanished_mrs`
+recognise a vanished MR as merged. An entry with no `host` is read as
+`DEFAULT_HOST` (gitlab.com), which is what makes state written before the second
+instance existed still resolve — the first run after that change re-keys every
+entry, and the old keys look "vanished" but resolve as still-open, so no phantom
+deployment is recorded. Legacy deployment entries may still carry a `stage`
 field; `check_deployments` pops it.
 
 ## glab quirks
 
 - **`glab api` does not accept `--jq`** — pipe through `json.loads` and filter
   in Python.
+- **`glab api --hostname <host>`** picks the instance. Both are authenticated in
+  `~/Library/Application Support/glab-cli/config.yml`; `glab auth status` shows
+  them. A group path with a `/` in it (`acme/portal`) is URL-encoded
+  the same way a project path is.
 - **Project paths must be URL-encoded** in `glab api` paths
   (`acme/common/frontend` → `acme%2Fcommon%2Ffrontend`). Use
   `urllib.parse.quote(path, safe="")`.
