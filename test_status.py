@@ -10,9 +10,9 @@ import unittest
 from monitor_prs import (
     ACT,
     ANSWER,
-    DEFAULT_HOST,
+    GITLAB_HOST,
+    GITLAB_USERNAME,
     HEADERS,
-    HOSTS,
     MIN_WIDTHS,
     PEOPLE,
     PIPELINE_INFLIGHT,
@@ -31,17 +31,15 @@ from monitor_prs import (
     _split_by_mark,
     extract_task_name,
     fmt_status,
-    mr_key,
     mr_short_id,
     open_mr_rows,
     pending_deploy_status,
     status_signal,
-    unreachable_rows,
+    unreachable_row,
     unresolved_threads_await_user,
 )
-from monitor_prs import HostFailure
 
-SELF_HOSTED = "gitlab.example.com"
+PROJECT = "acme/web/frontend"
 
 
 def row(mark, *, pr="`p!1`", status="s", title="title", task="task"):
@@ -57,7 +55,7 @@ JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manu
 def all_status_cells():
     """Every Status cell the open and awaiting-deploy tables can produce, bar the
     ones carrying free text (an unmapped merge status, a `check failed:` error)."""
-    yield unreachable_rows([HostFailure("h", "e")])[0].status
+    yield unreachable_row().status
     for merge_status in (*_MERGE_STATUS, "mergeable"):
         for approved in (False, True):
             yield fmt_status(merge_status, approved, False)[1]
@@ -131,8 +129,8 @@ class OwnThreads(unittest.TestCase):
     blocks the merge on it all the same, so it stays in the report — but not as
     feedback waiting on him."""
 
-    def awaits(self, discussions, username="jdoe"):
-        return unresolved_threads_await_user(discussions, username)
+    def awaits(self, discussions):
+        return unresolved_threads_await_user(discussions)
 
     def test_a_thread_only_the_user_wrote_in_leaves_the_mr_with_the_reviewers(self):
         self.assertEqual(
@@ -154,39 +152,33 @@ class OwnThreads(unittest.TestCase):
         self.assertEqual(fmt_status("discussions_not_resolved", False, True, False)[0], ACT)
 
     def test_a_thread_the_user_opened_and_nobody_answered_waits_on_no_reply(self):
-        self.assertFalse(self.awaits([thread("jdoe")]))
+        self.assertFalse(self.awaits([thread(GITLAB_USERNAME)]))
 
     def test_a_reviewer_replying_in_his_thread_turns_it_into_feedback(self):
-        self.assertTrue(self.awaits([thread("jdoe", "alice42")]))
+        self.assertTrue(self.awaits([thread(GITLAB_USERNAME, "alice.martin")]))
 
     def test_a_thread_a_reviewer_opened_waits_on_his_reply(self):
-        self.assertTrue(self.awaits([thread("bobsmith")]))
+        self.assertTrue(self.awaits([thread("bob.smith")]))
 
     def test_a_resolved_reviewer_thread_is_behind_him(self):
-        self.assertFalse(self.awaits([thread("alice42", resolved=True)]))
+        self.assertFalse(self.awaits([thread("alice.martin", resolved=True)]))
 
     def test_one_reviewer_thread_among_his_own_is_enough(self):
-        discussions = [thread("jdoe"), thread("jdoe"), thread("carol7")]
+        discussions = [thread(GITLAB_USERNAME), thread(GITLAB_USERNAME), thread("carol.white")]
         self.assertTrue(self.awaits(discussions))
 
     def test_a_plain_comment_is_not_a_thread_to_resolve(self):
         comment = {"individual_note": True, "notes": [
-            {"author": {"username": "alice42"}, "resolvable": False},
+            {"author": {"username": "alice.martin"}, "resolvable": False},
         ]}
         self.assertFalse(self.awaits([comment]))
 
     def test_gitlabs_own_system_notes_never_make_a_thread_await_him(self):
-        own = thread("jdoe")
+        own = thread(GITLAB_USERNAME)
         own["notes"].append(
             {"author": {"username": "gitlab-bot"}, "system": True, "resolvable": False}
         )
         self.assertFalse(self.awaits([own]))
-
-    def test_his_handle_on_the_self_hosted_instance_is_read_as_his_own(self):
-        own = thread("john.doe")
-        self.assertFalse(self.awaits([own], "john.doe"))
-        # The gitlab.com handle would make his own note read as a reviewer's.
-        self.assertTrue(self.awaits([own], "jdoe"))
 
 
 class TaskNames(unittest.TestCase):
@@ -215,68 +207,39 @@ class TaskNames(unittest.TestCase):
         self.assertEqual(extract_task_name(None), "")
 
 
-class MultipleInstances(unittest.TestCase):
-    """Repos migrate from gitlab.com to the self-hosted instance one at a time,
-    so a repo can be live on both at once."""
+class MrIds(unittest.TestCase):
+    def test_the_table_names_the_mr_by_repo_and_number_alone(self):
+        self.assertEqual(mr_short_id(PROJECT, 1904), "frontend!1904")
 
-    def test_each_instance_is_listed_once_under_the_users_handle_there(self):
-        self.assertEqual(len({h.name for h in HOSTS}), len(HOSTS))
-        self.assertEqual(DEFAULT_HOST.name, "gitlab.com")
-
-    def test_a_repo_open_on_both_instances_gets_a_key_of_its_own_on_each(self):
-        old = mr_key("gitlab.com", "acme/portal/portal-frontend", 170)
-        new = mr_key(SELF_HOSTED, "acme/portal/portal-frontend", 170)
-        self.assertNotEqual(old, new)
-
-    def test_the_table_names_the_mr_without_the_instance_it_lives_on(self):
-        self.assertEqual(
-            mr_short_id("acme/portal/portal-frontend", 170),
-            "portal-frontend!170",
-        )
-
-    def test_a_row_reads_as_the_mr_number_rather_than_its_state_key(self):
-        key = mr_key(SELF_HOSTED, "acme/portal/portal-frontend", 170)
-        entry = mr("mergeable", approved=True)
-        entry |= {"host": SELF_HOSTED, "short_id": "portal-frontend!170"}
-        self.assertEqual(_plain(open_mr_rows({key: entry})[0].pr), "`portal-frontend!170`")
+    def test_a_row_reads_as_its_state_key(self):
+        key = mr_short_id(PROJECT, 1904)
+        rows = open_mr_rows({key: mr("mergeable", approved=True)})
+        self.assertEqual(_plain(rows[0].pr), "`frontend!1904`")
 
 
 class UnreachableInstance(unittest.TestCase):
-    """One instance failing never blanks the other's MRs, and is never silent."""
+    """GitLab not answering never fails the run, and is never silent either."""
 
-    def failure(self, host=SELF_HOSTED):
-        return unreachable_rows([HostFailure(host, "dial tcp: i/o timeout")])[0]
-
-    def test_an_instance_that_did_not_answer_gets_a_row_naming_it(self):
-        row = self.failure()
-        self.assertEqual(row.title, SELF_HOSTED)
+    def test_the_row_names_the_instance_that_did_not_answer(self):
+        row = unreachable_row()
+        self.assertEqual(row.title, GITLAB_HOST)
         self.assertIn("unreachable", row.status)
 
     def test_an_unread_instance_is_on_the_user_so_the_tab_cannot_claim_all_clear(self):
-        self.assertEqual(self.failure().mark, ACT)
+        self.assertEqual(unreachable_row().mark, ACT)
 
-    def test_the_glab_error_stays_out_of_the_table(self):
-        self.assertNotIn("i/o timeout", "".join(self.failure()))
-
-    def test_it_leads_the_table_over_the_mrs_the_run_could_read(self):
-        rows = _by_severity([self.failure(), *open_mr_rows({"p!1": mr("mergeable")})])
-        self.assertEqual(rows[0].title, SELF_HOSTED)
+    def test_it_leads_the_deploy_rows_the_run_could_still_read(self):
+        rows = _by_severity([row(PEOPLE, pr="`frontend!7`"), unreachable_row()])
+        self.assertEqual(rows[0].title, GITLAB_HOST)
 
     def test_a_row_with_no_mr_number_still_sorts(self):
-        rows = _by_severity([row(ACT, pr="`frontend!7`"), self.failure()])
+        rows = _by_severity([row(ACT, pr="`frontend!7`"), unreachable_row()])
         self.assertEqual(len(rows), 2)
-
-    def test_each_silent_instance_is_named_on_its_own_row(self):
-        rows = unreachable_rows([HostFailure("a.example", "x"), HostFailure("b.example", "y")])
-        self.assertEqual([r.title for r in rows], ["a.example", "b.example"])
-
-    def test_no_failure_puts_no_row_in_the_table(self):
-        self.assertEqual(unreachable_rows([]), [])
 
 
 class DeploySignals(unittest.TestCase):
     def dep(self):
-        return {"project_path": "acme/common/frontend"}
+        return {"project_path": PROJECT}
 
     def test_an_untriggered_production_job_is_on_the_user(self):
         jobs = [{"name": "deploy_production", "status": "manual", "id": 7}]
@@ -296,16 +259,7 @@ class DeploySignals(unittest.TestCase):
     def test_the_awaiting_trigger_cell_links_to_the_projects_main_commits_page(self):
         jobs = [{"name": "deploy_production", "status": "manual", "id": 7}]
         cell = pending_deploy_status("success", jobs, self.dep())[1]
-        self.assertIn("https://gitlab.com/acme/common/frontend/-/commits/main", cell)
-
-    def test_a_migrated_project_links_to_the_instance_it_now_lives_on(self):
-        dep = {"host": SELF_HOSTED, "project_path": "acme/portal/portal-frontend"}
-        jobs = [{"name": "deploy_production", "status": "manual", "id": 7}]
-        cell = pending_deploy_status("success", jobs, dep)[1]
-        self.assertIn(
-            f"https://{SELF_HOSTED}/acme/portal/portal-frontend/-/commits/main",
-            cell,
-        )
+        self.assertIn(f"https://{GITLAB_HOST}/{PROJECT}/-/commits/main", cell)
 
     def test_the_production_job_id_is_recorded_for_the_skill_to_trigger(self):
         dep = self.dep()
@@ -428,24 +382,9 @@ class LinkedMrIds(unittest.TestCase):
         )
 
     def test_a_pending_deploy_opens_the_merge_request_it_shipped(self):
-        entry = {"project_path": "acme/common/frontend"}
         self.assertEqual(
-            _linked_mr_id(entry, "frontend!1817"),
-            _hyperlink(
-                "`frontend!1817`",
-                "https://gitlab.com/acme/common/frontend/-/merge_requests/1817",
-            ),
-        )
-
-    def test_a_rebuilt_url_points_at_the_instance_the_mr_lives_on(self):
-        entry = {"host": SELF_HOSTED, "project_path": "acme/portal/portal-backend"}
-        self.assertEqual(
-            _linked_mr_id(entry, "portal-backend!12"),
-            _hyperlink(
-                "`portal-backend!12`",
-                f"https://{SELF_HOSTED}/acme/portal/portal-backend"
-                "/-/merge_requests/12",
-            ),
+            _linked_mr_id({"project_path": PROJECT}, "frontend!1817"),
+            _hyperlink("`frontend!1817`", f"https://{GITLAB_HOST}/{PROJECT}/-/merge_requests/1817"),
         )
 
     def test_a_cell_with_nowhere_to_point_stays_plain_text(self):

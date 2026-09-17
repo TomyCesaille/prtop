@@ -73,18 +73,18 @@ picks up a second meaning.
 
 Single file, stdlib only. Sections in order:
 
-1. **Configuration constants** (`HOSTS`, `DEFAULT_HOST`, `TRIGRAM`,
-   `STATE_FILE`, regexes).
+1. **Configuration constants** (`GITLAB_HOST`, `GITLAB_USERNAME`,
+   `GITLAB_GROUP`, `TRIGRAM`, `STATE_FILE`, regexes).
 2. **`_run` / `glab_api`** — subprocess wrappers around `glab api`. All GitLab
    calls go through `glab_api`; never construct HTTP requests directly.
-   `glab_api` is GET-only by design — keep it that way. Its first argument is
-   the hostname and is never optional (see **Two GitLab instances**).
+   `glab_api` is GET-only by design — keep it that way. It passes `--hostname`
+   on every call (see **The GitLab instance**).
 3. **State I/O** — `load_state` / `save_state`. Atomic write via `.json.tmp`.
-4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list for one
-   `Host`, tagging each summary with it), `fetch_mr_detail` (per-MR hydration,
-   two API calls, plus `fetch_discussions` on an MR whose threads block the
-   merge), `gather_all_mrs` (ThreadPoolExecutor fan-out, first across hosts,
-   then across the pooled MRs).
+4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list),
+   `fetch_mr_detail` (per-MR hydration, two API calls, plus `fetch_discussions`
+   on an MR whose threads block the merge), `gather_open_mrs`
+   (ThreadPoolExecutor fan-out across the MRs, guarded so GitLab not answering
+   comes back as an error rather than an exception).
 5. **Track merges** — `track_vanished_mrs` resolves MRs that left the open list;
    a merged one gets a `deployments` entry pointing at its merge-commit main
    pipeline (pure side effect, no output). `open_mr_rows` builds the open-MR
@@ -104,55 +104,43 @@ Single file, stdlib only. Sections in order:
    `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
    only chrome is one `next tick @ <date HH:MM>` line before each sleep.
 
-## Two GitLab instances
+## The GitLab instance
 
-The company is migrating repo by repo from gitlab.com to the self-hosted
-`gitlab.example.com`, so both carry live MRs. `HOSTS` is the whole config:
+Every repo lives on the company's self-hosted GitLab, `gitlab.example.com`,
+under the `acme` root group. The three `GITLAB_*` constants are the whole
+config:
 
 ```python
-HOSTS = (
-    Host("gitlab.com", "jdoe", "acme"),
-    Host("gitlab.example.com", "john.doe", "acme/portal"),
-)
+GITLAB_HOST = "gitlab.example.com"
+GITLAB_USERNAME = "john.doe"
+GITLAB_GROUP = "acme"
 ```
 
-- **The self-hosted scope is a subgroup, not the `acme` root**, and that is
-  deliberate. A repo mid-migration is open on both sides with the same MR number
-  — `docs!1410` is live on each right now — and a root-level scope would put
-  it in the table twice. `portal` holds exactly the repos that have moved
-  (`portal-backend`, `portal-frontend`). Widen the group as more
-  land; don't reach for the root to save the edit.
-- **The user's handle differs per instance** (`jdoe` vs `john.doe`),
-  so it lives on the `Host`, not in a module constant.
-  `unresolved_threads_await_user` takes it as an argument — reading the wrong
-  one turns his own hint threads back into feedback awaiting him.
-- **`--hostname` is passed on every `glab api` call, gitlab.com included.**
-  Without it `glab` resolves the host from the git repo the working directory
-  sits in, so a run started from inside a migrated checkout would query the
-  wrong instance.
-- **An unreachable instance degrades, it doesn't blank the run.**
-  `gather_host_mrs` catches `GlabError` around both the listing and its MRs'
-  hydration (an instance can drop between the two), so one host failing leaves
-  the other's rows intact. Three rules hold the honesty:
-  - `unreachable_rows` gives each silent host a row marked **`!`**, titled with
-    the hostname, status `⚠️ instance unreachable`. `!` rather than `?` because
-    it feeds `action_needed`: a green tab claims all-clear, which the run cannot
-    claim over MRs it never saw.
+- **`--hostname` is passed on every `glab api` call.** Without it `glab`
+  resolves the host from the git repo the working directory sits in (gitlab.com
+  outside one), so a run started from the wrong checkout would query the wrong
+  instance.
+- **GitLab not answering degrades the run, it doesn't fail it.**
+  `gather_open_mrs` catches `GlabError` around both the listing and the MRs'
+  hydration (the instance can drop between the two) and hands `run_once` the
+  error instead. Three rules hold the honesty:
+  - `unreachable_row` stands in for the open MRs: one row marked **`!`**, titled
+    with the hostname, status `⚠️ instance unreachable`. `!` rather than `?`
+    because it feeds `action_needed`: a green tab claims all-clear, which the run
+    cannot claim over MRs it never saw.
   - The `glab` error goes to **stderr**, never the table — the report stays one
     table, and `watch_prs.sh` still captures it via `2>&1`.
-  - `run_once` **carries the failed host's previous `open_mrs` entries into the
-    saved state** but not into the rows. They are the merge-detection baseline:
-    dropping them would lose an MR that merges mid-outage, and rendering them
-    would report a status the run could not confirm. `track_vanished_mrs` then
-    sees them as still-present and can't read the outage as a wave of merges.
+  - `run_once` **carries the previous `open_mrs` entries into the saved state**
+    but not into the rows. They are the merge-detection baseline: dropping them
+    would lose an MR that merges mid-outage, and rendering them would report a
+    status the run could not confirm. `track_vanished_mrs` then sees them as
+    still-present and can't read the outage as a wave of merges.
   `check_deployments` follows the same shape: a frontier lookup that fails falls
   back to `None`, so evaluation drops to the MR's own pipeline and reports
   `⚠️ check failed` on that row alone.
-- **Every URL is built from the entry's `host`**, never a `gitlab.com` literal —
-  the PR-cell hyperlink (`_linked_mr_id`) and the awaiting-prod-trigger commits
-  link (`pending_deploy_status`).
-- **Pipeline ids share no sequence across instances**, so the production frontier
-  is keyed on `(host, project)`, not project alone.
+- **Every URL is built from `GITLAB_HOST`** — the PR-cell hyperlink
+  (`_linked_mr_id`) and the awaiting-prod-trigger commits link
+  (`pending_deploy_status`).
 
 ## State schema
 
@@ -160,40 +148,32 @@ HOSTS = (
 
 ```jsonc
 {
-  "open_mrs":    { "<host>:<repo>!<iid>": { title, task_name, note_count, state,
-                                        approvals[], fully_approved, has_conflicts,
-                                        merge_status, threads_await_user,
-                                        host, short_id, project_path, iid,
-                                        web_url, last_checked } },
-  "deployments": { "<host>:<repo>!<iid>": { title, task_name, host, short_id,
-                                        project (url-encoded), project_path, iid,
-                                        web_url, pipeline_id, pipeline_status,
-                                        pipeline_url, prod_job_id? } },
+  "open_mrs":    { "<repo>!<iid>": { title, task_name, note_count, state,
+                                 approvals[], fully_approved, has_conflicts,
+                                 merge_status, threads_await_user,
+                                 project_path, iid, web_url, last_checked } },
+  "deployments": { "<repo>!<iid>": { title, task_name, project (url-encoded),
+                                 project_path, iid, web_url, pipeline_id,
+                                 pipeline_status, pipeline_url, prod_job_id? } },
   "last_checked": "<iso>"
 }
 ```
 
-The key carries the host because `<repo>!<iid>` alone collides while a repo is
-open on both instances. `short_id` is that bare `<repo>!<iid>` — what the PR
-column shows; rendering reads the field rather than parsing the key.
-`host`/`project_path`/`iid` in `open_mrs` are what let `track_vanished_mrs`
-recognise a vanished MR as merged. An entry with no `host` is read as
-`DEFAULT_HOST` (gitlab.com), which is what makes state written before the second
-instance existed still resolve — the first run after that change re-keys every
-entry, and the old keys look "vanished" but resolve as still-open, so no phantom
-deployment is recorded. Legacy deployment entries may still carry a `stage`
+The key is the `<repo>!<iid>` the PR column shows (`mr_short_id`).
+`project_path`/`iid` in `open_mrs` are what let `track_vanished_mrs` recognise a
+vanished MR as merged. Legacy deployment entries may still carry a `stage`
 field; `check_deployments` pops it.
 
 ## glab quirks
 
 - **`glab api` does not accept `--jq`** — pipe through `json.loads` and filter
   in Python.
-- **`glab api --hostname <host>`** picks the instance. Both are authenticated in
-  `~/Library/Application Support/glab-cli/config.yml`; `glab auth status` shows
-  them. A group path with a `/` in it (`acme/portal`) is URL-encoded
-  the same way a project path is.
+- **`glab api --hostname <host>`** picks the instance; the token lives in
+  `~/Library/Application Support/glab-cli/config.yml` and `glab auth status`
+  shows it. A group path with a `/` in it is URL-encoded the same way a project
+  path is.
 - **Project paths must be URL-encoded** in `glab api` paths
-  (`acme/common/frontend` → `acme%2Fcommon%2Ffrontend`). Use
+  (`acme/web/frontend` → `acme%2Fweb%2Ffrontend`). Use
   `urllib.parse.quote(path, safe="")`.
 - `user_notes_count` on the MR object excludes system notes — it's recorded in
   the state as `note_count` (not currently surfaced in the report). Don't

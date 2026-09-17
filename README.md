@@ -14,34 +14,24 @@ State lives in `~/.claude/pr-monitor-state.json`.
 ## Requirements
 
 - Python 3.10+ (stdlib only — no `pip install` needed)
-- [`glab`](https://gitlab.com/gitlab-org/cli) authenticated on **both** GitLab
-  instances — `gitlab.com` as `jdoe`, `gitlab.example.com` as
-  `john.doe` (`glab auth status` lists them)
+- [`glab`](https://gitlab.com/gitlab-org/cli) authenticated on
+  `gitlab.example.com` as `john.doe` (`glab auth status` shows it)
 - macOS iTerm2 (optional; tab colour and the table's hyperlinks use OSC escape codes that other terminals ignore)
 
-## The two instances
+## The GitLab instance
 
-The company is migrating repo by repo from gitlab.com to the self-hosted
-`gitlab.example.com`, so both carry live MRs. `HOSTS` in `monitor_prs.py` names
-each one with the user's handle there and the group to list:
+Every repo lives on the company's self-hosted GitLab, `gitlab.example.com`,
+under the `acme` root group. The `GITLAB_*` constants in `monitor_prs.py`
+name the instance, the user's handle there (`john.doe`) and the group
+whose MRs are listed (subgroups included).
 
-| Instance | Handle | Group listed |
-|---|---|---|
-| `gitlab.com` | `jdoe` | `acme` |
-| `gitlab.example.com` | `john.doe` | `acme/portal` |
-
-The self-hosted scope is the `portal` subgroup — the repos that have moved
-so far (`portal-backend`, `portal-frontend`) — rather than the
-`acme` root. A repo mid-migration has the same MR open on both sides, and
-a root-level scope would report it twice. Widen the group as more repos land.
-
-An instance that doesn't answer never blanks the other's MRs, and is never
-silent about it either: it gets a row of its own at the top of the table
-(`! ⚠️ instance unreachable`, titled with the hostname) and turns the tab orange,
-because green would be claiming all-clear over MRs the run never saw. The `glab`
-error goes to stderr, keeping the report one table. Its MRs stay in the state
-file though they're not shown — that's the merge-detection baseline, so one
-merging mid-outage is still caught on the next run.
+GitLab not answering never fails the run, and is never silent either: one row
+stands in for the open MRs (`! ⚠️ instance unreachable`, titled with the
+hostname) and the tab turns orange, because green would be claiming all-clear
+over MRs the run never saw. The `glab` error goes to stderr, keeping the report
+one table. The previous open MRs stay in the state file though they're not shown
+— that's the merge-detection baseline, so one merging mid-outage is still caught
+on the next run.
 
 ## Usage
 
@@ -78,7 +68,7 @@ The report is deliberately just **one table** — no activity-delta alerts, no
 prose suggestion sections, no status line. The leading mark column and the Status
 column are the whole picture.
 
-1. **Lists open MRs** assigned to the user in each instance's group (incl. subgroups).
+1. **Lists open MRs** assigned to the user in the `acme` group (incl. subgroups).
 2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
    (calls run in parallel across MRs).
 3. **Detects MRs merged since the last check** (by me, a teammate, or the
@@ -92,8 +82,7 @@ column are the whole picture.
    plain ASCII, so it survives any terminal, font size, or colour vision.
 
    The PR cell (`repo!iid`) is a terminal hyperlink to the merge request
-   (cmd+click in iTerm2), pointing at whichever instance the MR lives on. The
-   cell never names the instance — the link carries it.
+   (cmd+click in iTerm2).
 
    | Mark | Meaning | Examples |
    |---|---|---|
@@ -136,14 +125,12 @@ table keeps a fixed width and never wraps in the terminal.
 
 `~/.claude/pr-monitor-state.json`
 
-Keys are `<host>:<repo>!<iid>`. The host prefix is what keeps the two instances
-apart while a repo lives on both — `docs!1410` exists on each. The `repo!iid`
-the table shows is stored separately as `short_id`.
+Keys are the `repo!iid` the table shows.
 
 ```jsonc
 {
   "open_mrs": {
-    "gitlab.com:frontend!1659": {
+    "frontend!1904": {
       "title": "...",
       "task_name": "...",       // derived from the dev/<slug>-<hash> branch
       "note_count": 3,
@@ -153,20 +140,16 @@ the table shows is stored separately as `short_id`.
       "has_conflicts": false,
       "merge_status": "not_approved",
       "threads_await_user": true,  // false when every unresolved thread is mine alone
-      "host": "gitlab.com",         // which instance; `glab api --hostname` takes it
-      "short_id": "frontend!1659",  // what the PR column shows
-      "project_path": "acme/common/frontend",
-      "iid": 1659,
-      "web_url": "https://gitlab.com/.../merge_requests/1659",
+      "project_path": "acme/web/frontend",
+      "iid": 1904,
+      "web_url": "https://gitlab.example.com/.../merge_requests/1904",
       "last_checked": "2026-07-06T10:30:00+00:00"
     }
   },
   "deployments": {
-    "gitlab.example.com:portal-frontend!47": {
+    "portal-frontend!47": {
       "title": "...",
       "task_name": "...",
-      "host": "gitlab.example.com",
-      "short_id": "portal-frontend!47",
       "project": "acme%2Fportal%2Fportal-frontend",
       "project_path": "acme/portal/portal-frontend",
       "iid": 47,
@@ -187,11 +170,9 @@ Safe to delete — the next run will recreate it with a fresh baseline.
 
 - On the very first run the previous state is empty, so nothing merged is
   detected — it just records a baseline and prints the table.
-- `host`/`project_path`/`iid` in `open_mrs` are what allow a later run to
-  recognise a vanished MR as merged and start tracking its deployment. Entries
-  written by older versions lack `project_path`/`iid`; those MRs are silently
-  skipped for deploy tracking. An entry without `host` is read as `gitlab.com`,
-  so state written before the second instance existed still resolves.
+- `project_path`/`iid` in `open_mrs` are what allow a later run to recognise a
+  vanished MR as merged and start tracking its deployment. Entries written by
+  older versions lack them; those MRs are silently skipped for deploy tracking.
 - Because the report is table-only, the watcher wakes on anything visible in the
   table — a Status change (approval-to-full, rebase needed, conflict, mergeable),
   a merge, a new/removed MR, or deployment progress. It no longer wakes on a bare
