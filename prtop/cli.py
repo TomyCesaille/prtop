@@ -13,17 +13,18 @@ from typing import NamedTuple
 
 from prtop import __version__, model
 from prtop.config import Config, ConfigError, load_config
+from prtop.demo import demo_report
 from prtop.forges import Forge, make_forge
 from prtop.model import ForgeError
 from prtop.report import (
     ACT,
     Row,
+    assemble_rows,
     by_severity,
     deploy_row,
     open_row,
     plain,
     render_report,
-    split_by_mark,
     unreachable_row,
 )
 from prtop.state import load_state, save_state
@@ -89,13 +90,7 @@ def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
     deploy_rows = deployment_rows(forge, deployments) if config.deploy_tracking else []
     save_state(config.state_file, state)
 
-    # Open MRs on top, merged-but-not-yet-deployed below, with a rule between the
-    # two groups and another between each severity block inside them.
-    rows: list[Row | None] = split_by_mark(open_rows)
-    if deploy_rows:
-        if open_rows:
-            rows.append(None)
-        rows.extend(split_by_mark(deploy_rows))
+    rows = assemble_rows(open_rows, deploy_rows)
     text = render_report(rows, tasks.shows_column) if rows else "No open merge requests or pending deploys."
 
     # A forge the run could not read counts too: its row is marked `!`, since
@@ -216,6 +211,10 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"repeat forever, aligned to wall-clock ticks (default {DEFAULT_LOOP_INTERVAL}s)",
     )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="print the report for made-up merge requests, without reading any forge",
+    )
     commands = parser.add_subparsers(dest="command")
     watch_parser = commands.add_parser(
         "watch",
@@ -234,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "watch" and args.loop is not None:
         parser.error("--loop and watch are two ways to repeat; pick one")
+    if args.demo:
+        print()
+        print(demo_report())
+        return 0
 
     try:
         config = load_config()

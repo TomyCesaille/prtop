@@ -200,6 +200,15 @@ def split_by_mark(rows: list[Row]) -> list[Row | None]:
     return out
 
 
+def assemble_rows(open_rows: list[Row], deploy_rows: list[Row]) -> list[Row | None]:
+    """Open MRs on top, merged-but-not-yet-deployed below, with a rule between the
+    two groups and another between each severity block inside them."""
+    rows = split_by_mark(open_rows)
+    if open_rows and deploy_rows:
+        rows.append(None)
+    return rows + split_by_mark(deploy_rows)
+
+
 # ---------- Table ----------
 
 TITLE_MAX = 42
