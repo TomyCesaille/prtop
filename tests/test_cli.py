@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from prtop import model
-from prtop.cli import run_check, set_tab_color
+from prtop.cli import run_check, set_tab_color, watch
 from prtop.config import Config
 from prtop.model import DeployState, ForgeError
 
@@ -134,6 +134,50 @@ class Check(unittest.TestCase):
         report = self.check()
         self.assertIn("awaiting prod trigger", report.text)
         self.assertFalse(report.action_needed)
+
+
+class Watch(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = Config(state_file=Path(tmp.name) / "state.json")
+        self.forge = FakeForge()
+        self.now = 0.0
+        self.checks = 0
+
+    def sleep(self, seconds):
+        self.now += seconds
+        self.checks += 1
+        if self.checks == self.change_after:
+            self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True, title="feat: ready")}
+
+    def watch(self, change_after=None, cap=3600):
+        self.change_after = change_after
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = watch(self.config, self.forge, 300, cap, sleep=self.sleep, clock=lambda: self.now)
+        return code, out.getvalue()
+
+    def test_it_exits_with_the_report_as_soon_as_something_changes(self):
+        code, out = self.watch(change_after=2)
+        self.assertEqual(code, 0)
+        self.assertIn("feat: ready", out)
+        self.assertEqual(out.count("no change"), 2)
+
+    def test_it_gives_up_with_a_timeout_line_after_the_cap(self):
+        code, out = self.watch(cap=900)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.rstrip().endswith("TIMEOUT after 900s with no PR activity"))
+
+    def test_a_check_that_fails_stops_it_with_an_error(self):
+        def broken(deployments):
+            raise ForgeError("boom")
+
+        self.forge.deploy_states = broken
+        with redirect_stderr(io.StringIO()):
+            code, out = self.watch()
+        self.assertEqual(code, 1)
+        self.assertIn("check failed", out)
 
 
 class TabColor(unittest.TestCase):

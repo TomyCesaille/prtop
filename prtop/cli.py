@@ -1,4 +1,5 @@
-"""The `prtop` command: one check by default, `--loop` to repeat it."""
+"""The `prtop` command: one check by default, `--loop` to repeat it, `watch` to
+wait for the report to change."""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ import argparse
 import os
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import NamedTuple
 
@@ -20,6 +21,7 @@ from prtop.report import (
     by_severity,
     deploy_row,
     open_row,
+    plain,
     render_report,
     split_by_mark,
     unreachable_row,
@@ -27,6 +29,7 @@ from prtop.report import (
 from prtop.state import load_state, save_state
 
 DEFAULT_LOOP_INTERVAL = 300
+DEFAULT_WATCH_CAP = 7200
 
 
 class Report(NamedTuple):
@@ -164,6 +167,42 @@ def loop(config: Config, forge: Forge, interval: int) -> int:
     return 0
 
 
+def watch(
+    config: Config,
+    forge: Forge,
+    interval: int,
+    cap: int,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> int:
+    """Check every `interval` seconds and exit as soon as the report changes, so
+    a backgrounded run re-invokes the agent that started it exactly when
+    something needs attention. The first check only records a baseline.
+
+    Exits 0 on a change or after `cap` quiet seconds (with a TIMEOUT line), and
+    1 when a check fails.
+    """
+    started = clock()
+    baseline = None
+    while True:
+        try:
+            report = run_check(config, forge)
+        except ForgeError as e:
+            print(f"prtop: {e}", file=sys.stderr)
+            print("[watch] check failed", flush=True)
+            return 1
+        if baseline is not None and plain(report.text) != baseline:
+            print(report.text, flush=True)
+            return 0
+        baseline = plain(report.text)
+        print(f"[watch] {datetime.now():%H:%M:%S} no change", flush=True)
+        if clock() - started >= cap:
+            print(f"TIMEOUT after {cap}s with no PR activity", flush=True)
+            return 0
+        sleep(interval)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="prtop",
@@ -175,7 +214,24 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"repeat forever, aligned to wall-clock ticks (default {DEFAULT_LOOP_INTERVAL}s)",
     )
+    commands = parser.add_subparsers(dest="command")
+    watch_parser = commands.add_parser(
+        "watch",
+        help="check on an interval and exit as soon as the report changes",
+        description=watch.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    watch_parser.add_argument(
+        "--interval", type=int, default=DEFAULT_LOOP_INTERVAL, metavar="SECONDS",
+        help=f"seconds between checks (default {DEFAULT_LOOP_INTERVAL})",
+    )
+    watch_parser.add_argument(
+        "--cap", type=int, default=DEFAULT_WATCH_CAP, metavar="SECONDS",
+        help=f"quiet seconds before giving up with a TIMEOUT line (default {DEFAULT_WATCH_CAP})",
+    )
     args = parser.parse_args(argv)
+    if args.command == "watch" and args.loop is not None:
+        parser.error("--loop and watch are two ways to repeat; pick one")
 
     try:
         config = load_config()
@@ -184,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     forge = make_forge(config)
 
+    if args.command == "watch":
+        return watch(config, forge, args.interval, args.cap)
     if args.loop is not None:
         return loop(config, forge, args.loop)
     try:
