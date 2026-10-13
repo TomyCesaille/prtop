@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Poll monitor_prs.py until the report changes, then exit — so a backgrounded
+# Poll prtop until the report changes, then exit — so a backgrounded
 # run re-invokes the calling agent exactly when something needs attention.
 #
 # Usage: bash watch_prs.sh [interval_seconds] [cap_seconds]
@@ -25,11 +25,11 @@ normalize() {
 
 prev=""
 while :; do
-  out=$(python3 "$SCRIPT_DIR/monitor_prs.py" 2>&1)
+  out=$(cd "$SCRIPT_DIR" && python3 -m prtop 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out"
-    echo "[watch] monitor_prs.py failed (exit $rc)"
+    echo "[watch] prtop failed (exit $rc)"
     exit 1
   fi
 
