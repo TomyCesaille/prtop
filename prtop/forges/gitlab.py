@@ -20,7 +20,7 @@ from urllib.parse import quote
 from prtop import model
 from prtop.config import Config
 from prtop.model import DeployState, ForgeError
-from prtop.tasks import extract_task_name
+from prtop.tasks import Issue, TaskSource
 
 PIPELINE_INFLIGHT = {
     "running", "pending", "preparing", "created",
@@ -156,7 +156,7 @@ class GitLab:
 
     # ---------- Open merge requests ----------
 
-    def open_merge_requests(self) -> dict[str, dict]:
+    def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
         scope = f"groups/{quote(self.group, safe='')}/" if self.group else ""
         # An MR in an archived project can no longer be acted on.
         query = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100"
@@ -164,10 +164,10 @@ class GitLab:
         if not summaries:
             return {}
         with ThreadPoolExecutor(max_workers=min(8, len(summaries))) as pool:
-            hydrated = list(pool.map(self._hydrate, summaries))
+            hydrated = list(pool.map(lambda summary: self._hydrate(summary, tasks), summaries))
         return dict(item for item in hydrated if item is not None)
 
-    def _hydrate(self, summary: dict) -> tuple[str, dict] | None:
+    def _hydrate(self, summary: dict, tasks: TaskSource) -> tuple[str, dict] | None:
         project_path = project_path_from_summary(summary)
         if not project_path:
             return None
@@ -184,10 +184,12 @@ class GitLab:
                 self._discussions(base), self.username()
             )
 
+        task = tasks.resolve(full.get("source_branch"), lambda: self._closing_issues(base))
         approvers = [(a.get("user") or {}).get("username") for a in approvals.get("approved_by") or []]
         return mr_short_id(project_path, iid), {
             "title": full.get("title", ""),
-            "task": extract_task_name(full.get("source_branch")),
+            "task": task.label if task else "",
+            "task_url": task.url if task else None,
             "status": REVIEW_STATUS.get(detailed, detailed),
             "fully_approved": bool(approvals.get("approved")),
             "has_conflicts": bool(full.get("has_conflicts")),
@@ -210,6 +212,13 @@ class GitLab:
             if len(batch) < 100:
                 break
         return out
+
+    def _closing_issues(self, base: str) -> list[Issue]:
+        # An issue from an external tracker (Jira) carries a string `id` instead of an `iid`.
+        return [
+            Issue(f"#{i['iid']}" if i.get("iid") else str(i.get("id", "")), i.get("title", ""), i.get("web_url"))
+            for i in self.api(f"{base}/closes_issues") or []
+        ]
 
     # ---------- Merges ----------
 
@@ -234,6 +243,7 @@ class GitLab:
         return {
             "title": entry.get("title", ""),
             "task": entry.get("task", ""),
+            "task_url": entry.get("task_url"),
             "project_path": project_path,
             "iid": iid,
             "web_url": entry.get("web_url"),

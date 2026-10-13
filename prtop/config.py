@@ -32,6 +32,10 @@ class Config:
     gitlab_username: str | None = None
     # Limits the listing to one group and its subgroups; unset lists the whole instance.
     gitlab_group: str | None = None
+    # See `prtop.tasks` for what each source reads.
+    task_source: str = "none"
+    task_branch_pattern: str | None = None
+    task_url: str | None = None
     deploy_tracking: bool = True
     # Matches every production deploy job, while leaving prod test/migrate jobs out.
     deploy_job_pattern: str = r"deploy.*prod|prod.*deploy"
@@ -80,6 +84,9 @@ _SETTINGS: dict[str, tuple[str, Callable[[str, str], object]]] = {
     "GITLAB_HOST": ("gitlab_host", _text),
     "GITLAB_USERNAME": ("gitlab_username", _text),
     "GITLAB_GROUP": ("gitlab_group", _text),
+    "TASK_SOURCE": ("task_source", _one_of("none", "issues", "notion", "jira", "branch")),
+    "TASK_BRANCH_PATTERN": ("task_branch_pattern", _regex),
+    "TASK_URL": ("task_url", _text),
     "DEPLOY_TRACKING": ("deploy_tracking", _flag),
     "DEPLOY_JOB_PATTERN": ("deploy_job_pattern", _regex),
     "PRIMARY_DEPLOY_JOB_PATTERN": ("primary_deploy_job_pattern", _regex),

@@ -27,6 +27,7 @@ from prtop.report import (
     unreachable_row,
 )
 from prtop.state import load_state, save_state
+from prtop.tasks import TaskSource, task_source
 
 DEFAULT_LOOP_INTERVAL = 300
 DEFAULT_WATCH_CAP = 7200
@@ -60,13 +61,13 @@ def deployment_rows(forge: Forge, deployments: dict) -> list[Row]:
     return by_severity(rows)
 
 
-def run_check(config: Config, forge: Forge) -> Report:
+def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
     state = load_state(config.state_file)
     previous = state.get("open_mrs") or {}
     deployments = state.setdefault("deployments", {})
 
     try:
-        open_mrs, error = forge.open_merge_requests(), None
+        open_mrs, error = forge.open_merge_requests(tasks), None
     except ForgeError as e:
         open_mrs, error = {}, e
         print(f"prtop: {forge.host}: {e}", file=sys.stderr)
@@ -95,7 +96,7 @@ def run_check(config: Config, forge: Forge) -> Report:
         if open_rows:
             rows.append(None)
         rows.extend(split_by_mark(deploy_rows))
-    text = render_report(rows) if rows else "No open merge requests or pending deploys."
+    text = render_report(rows, tasks.shows_column) if rows else "No open merge requests or pending deploys."
 
     # A forge the run could not read counts too: its row is marked `!`, since
     # green would otherwise claim all-clear over MRs nobody saw.
@@ -142,14 +143,14 @@ def sleep_until_next_tick(interval: int) -> None:
 
 # ---------- Entry point ----------
 
-def check(config: Config, forge: Forge) -> None:
-    report = run_check(config, forge)
+def check(config: Config, forge: Forge, tasks: TaskSource) -> None:
+    report = run_check(config, forge, tasks)
     print()
     print(report.text, flush=True)
     set_tab_color(report.action_needed, config.tab_color)
 
 
-def loop(config: Config, forge: Forge, interval: int) -> int:
+def loop(config: Config, forge: Forge, tasks: TaskSource, interval: int) -> int:
     print(f"Looping every {interval}s, aligned to wall-clock ticks. Ctrl+C to stop.")
     try:
         # Kick off with an immediate check — unless the next aligned tick is under
@@ -158,7 +159,7 @@ def loop(config: Config, forge: Forge, interval: int) -> int:
             sleep_until_next_tick(interval)
         while True:
             try:
-                check(config, forge)
+                check(config, forge, tasks)
             except ForgeError as e:
                 print(f"prtop (continuing): {e}", file=sys.stderr)
             sleep_until_next_tick(interval)
@@ -170,6 +171,7 @@ def loop(config: Config, forge: Forge, interval: int) -> int:
 def watch(
     config: Config,
     forge: Forge,
+    tasks: TaskSource,
     interval: int,
     cap: int,
     *,
@@ -187,7 +189,7 @@ def watch(
     baseline = None
     while True:
         try:
-            report = run_check(config, forge)
+            report = run_check(config, forge, tasks)
         except ForgeError as e:
             print(f"prtop: {e}", file=sys.stderr)
             print("[watch] check failed", flush=True)
@@ -235,17 +237,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = load_config()
+        tasks = task_source(config)
     except ConfigError as e:
         print(f"prtop: {e}", file=sys.stderr)
         return 2
     forge = make_forge(config)
 
     if args.command == "watch":
-        return watch(config, forge, args.interval, args.cap)
+        return watch(config, forge, tasks, args.interval, args.cap)
     if args.loop is not None:
-        return loop(config, forge, args.loop)
+        return loop(config, forge, tasks, args.loop)
     try:
-        check(config, forge)
+        check(config, forge, tasks)
     except ForgeError as e:
         print(f"prtop: {e}", file=sys.stderr)
         return 1

@@ -16,6 +16,7 @@ from prtop.forges.gitlab import (
 )
 from prtop.model import DeployState, ForgeError
 from prtop.report import REVIEW_SIGNAL
+from prtop.tasks import IssueTasks, NoTasks, task_source
 
 HOST = "gitlab.example.com"
 PROJECT = "acme/web/frontend"
@@ -99,22 +100,22 @@ class OwnThreads(unittest.TestCase):
 class OpenMergeRequests(unittest.TestCase):
     def test_without_a_group_the_whole_instance_is_listed(self):
         forge = FakeGitLab({LIST_ALL: []})
-        self.assertEqual(forge.open_merge_requests(), {})
+        self.assertEqual(forge.open_merge_requests(NoTasks()), {})
         self.assertEqual(forge.calls, [LIST_ALL])
 
     def test_a_group_limits_the_listing_to_it_and_its_subgroups(self):
         listing = f"groups/acme%2Fweb/merge_requests?{QUERY}"
         forge = FakeGitLab({listing: []}, gitlab_group="acme/web")
-        forge.open_merge_requests()
+        forge.open_merge_requests(NoTasks())
         self.assertEqual(forge.calls, [listing])
 
     def test_an_mr_is_keyed_by_repo_and_number_with_its_review_state(self):
-        entry = FakeGitLab(open_mr()).open_merge_requests()["frontend!7"]
+        entry = FakeGitLab(open_mr()).open_merge_requests(NoTasks())["frontend!7"]
         self.assertEqual(entry["status"], model.AWAITING_REVIEW)
         self.assertEqual(entry["web_url"], f"https://{HOST}/{PROJECT}/-/merge_requests/7")
 
     def test_a_merge_status_gitlab_adds_later_passes_through_raw(self):
-        entry = FakeGitLab(open_mr("some_status_from_the_future")).open_merge_requests()["frontend!7"]
+        entry = FakeGitLab(open_mr("some_status_from_the_future")).open_merge_requests(NoTasks())["frontend!7"]
         self.assertEqual(entry["status"], "some_status_from_the_future")
 
     def test_every_gitlab_status_maps_to_a_state_the_report_knows(self):
@@ -124,24 +125,44 @@ class OpenMergeRequests(unittest.TestCase):
         responses = open_mr("discussions_not_resolved")
         responses[f"{MR}/discussions?per_page=100&page=1"] = [thread(ME)]
         responses["user"] = {"username": ME}
-        entry = FakeGitLab(responses).open_merge_requests()["frontend!7"]
+        entry = FakeGitLab(responses).open_merge_requests(NoTasks())["frontend!7"]
         self.assertFalse(entry["threads_await_user"])
 
     def test_a_configured_username_is_not_asked_of_the_instance(self):
         responses = open_mr("discussions_not_resolved")
         responses[f"{MR}/discussions?per_page=100&page=1"] = [thread(ME)]
         forge = FakeGitLab(responses, gitlab_username=ME)
-        forge.open_merge_requests()
+        forge.open_merge_requests(NoTasks())
         self.assertNotIn("user", forge.calls)
 
     def test_your_username_is_only_asked_for_when_threads_block_the_merge(self):
         forge = FakeGitLab(open_mr())
-        forge.open_merge_requests()
+        forge.open_merge_requests(NoTasks())
         self.assertNotIn("user", forge.calls)
 
     def test_an_instance_that_does_not_answer_raises(self):
         with self.assertRaises(ForgeError):
-            FakeGitLab({}).open_merge_requests()
+            FakeGitLab({}).open_merge_requests(NoTasks())
+
+
+class Tasks(unittest.TestCase):
+    def test_an_mr_closing_an_issue_takes_it_as_its_task(self):
+        responses = open_mr()
+        responses[f"{MR}/closes_issues"] = [{"iid": 12, "title": "Login fails", "web_url": "https://x.example/12"}]
+        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())["frontend!7"]
+        self.assertEqual((entry["task"], entry["task_url"]), ("#12 Login fails", "https://x.example/12"))
+
+    def test_an_issue_from_an_external_tracker_goes_by_its_key(self):
+        responses = open_mr()
+        responses[f"{MR}/closes_issues"] = [{"id": "PROJ-9", "title": "Login fails"}]
+        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())["frontend!7"]
+        self.assertEqual(entry["task"], "PROJ-9 Login fails")
+
+    def test_a_branch_based_source_costs_no_issue_call(self):
+        forge = FakeGitLab(open_mr(source_branch="PROJ-9-login"))
+        entry = forge.open_merge_requests(task_source(Config(state_file=Path("u"), task_source="jira")))["frontend!7"]
+        self.assertEqual(entry["task"], "PROJ-9 login")
+        self.assertNotIn(f"{MR}/closes_issues", forge.calls)
 
 
 class Merges(unittest.TestCase):
@@ -154,9 +175,10 @@ class Merges(unittest.TestCase):
             {"id": 8, "sha": "zzz"}, {"id": 9, "sha": "abc", "status": "running"},
         ]
         dep = FakeGitLab(responses).merged_deployment(
-            {"project_path": PROJECT, "iid": 7, "title": "feat: x", "task": "t", "web_url": "u"}
+            {"project_path": PROJECT, "iid": 7, "title": "feat: x", "task": "t", "task_url": "tu", "web_url": "u"}
         )
         self.assertEqual((dep["ref"], dep["pipeline_id"], dep["title"]), ("develop", 9, "feat: x"))
+        self.assertEqual((dep["task"], dep["task_url"]), ("t", "tu"))
 
     def test_an_mr_closed_without_merging_is_not_tracked(self):
         forge = FakeGitLab({MR: {"state": "closed"}})

@@ -149,6 +149,7 @@ class Row(NamedTuple):
     task: str
     pr: str
     status: str
+    task_url: str | None = None
 
 
 def open_row(key: str, entry: dict) -> Row:
@@ -156,12 +157,14 @@ def open_row(key: str, entry: dict) -> Row:
         entry["status"], entry["fully_approved"], entry["has_conflicts"],
         entry["threads_await_user"],
     )
-    return Row(mark, entry["title"], entry.get("task") or "—", linked_mr_id(entry, key), status)
+    task = entry.get("task") or "—"
+    return Row(mark, entry["title"], task, linked_mr_id(entry, key), status, entry.get("task_url"))
 
 
 def deploy_row(key: str, entry: dict, state: DeployState) -> Row:
     mark, status = deploy_signal(state)
-    return Row(mark, entry.get("title", ""), entry.get("task") or "—", linked_mr_id(entry, key), status)
+    task = entry.get("task") or "—"
+    return Row(mark, entry.get("title", ""), task, linked_mr_id(entry, key), status, entry.get("task_url"))
 
 
 def unreachable_row(host: str) -> Row:
@@ -201,6 +204,8 @@ def split_by_mark(rows: list[Row]) -> list[Row | None]:
 
 TITLE_MAX = 42
 TASK_MAX = 58
+# Without a Task column the title takes its width, so the table stays as wide.
+TITLE_MAX_ALONE = TITLE_MAX + len(" | ") + TASK_MAX
 
 # The widest Status cell the vocabulary can produce
 # (`🔍 merge check running, unapproved`). Flooring the column there holds the
@@ -211,6 +216,8 @@ STATUS_WIDTH = 34
 
 HEADERS = ("", "PR title", "Task", "PR", "Status")
 MIN_WIDTHS = (0, 0, 0, 0, STATUS_WIDTH)
+HEADERS_WITHOUT_TASK = ("", "PR title", "PR", "Status")
+MIN_WIDTHS_WITHOUT_TASK = (0, 0, 0, STATUS_WIDTH)
 
 
 def render_table(
@@ -236,10 +243,20 @@ def render_table(
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
-def render_report(rows: Sequence[Row | None]) -> str:
+def _task_cell(row: Row) -> str:
+    label = truncate(row.task, TASK_MAX)
+    return hyperlink(label, row.task_url) if row.task_url else label
+
+
+def render_report(rows: Sequence[Row | None], show_task: bool = True) -> str:
+    if not show_task:
+        cells = [
+            None if r is None else (r.mark, truncate(r.title, TITLE_MAX_ALONE), r.pr, r.status)
+            for r in rows
+        ]
+        return render_table(HEADERS_WITHOUT_TASK, cells, MIN_WIDTHS_WITHOUT_TASK)
     cells = [
-        None if r is None
-        else (r.mark, truncate(r.title, TITLE_MAX), truncate(r.task, TASK_MAX), r.pr, r.status)
+        None if r is None else (r.mark, truncate(r.title, TITLE_MAX), _task_cell(r), r.pr, r.status)
         for r in rows
     ]
     return render_table(HEADERS, cells, MIN_WIDTHS)

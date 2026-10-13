@@ -13,19 +13,21 @@ from typing import Protocol
 
 from prtop.config import Config
 from prtop.model import DeployState
+from prtop.tasks import TaskSource
 
 
 class Forge(Protocol):
     # Names the instance in the report when it does not answer.
     host: str
 
-    def open_merge_requests(self) -> dict[str, dict]:
+    def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
         """Every open MR assigned to you, keyed by the `repo!iid` the table shows.
 
-        Each entry carries `title`, `task`, `status` (a review state of
-        `prtop.model`), `fully_approved`, `has_conflicts`, `threads_await_user`
-        and `web_url`, plus whatever the forge needs to recognise the MR again in
-        `merged_deployment`. Raises `ForgeError` when the forge does not answer.
+        Each entry carries `title`, `task` and `task_url` (from `tasks`),
+        `status` (a review state of `prtop.model`), `fully_approved`,
+        `has_conflicts`, `threads_await_user` and `web_url`, plus whatever the
+        forge needs to recognise the MR again in `merged_deployment`. Raises
+        `ForgeError` when the forge does not answer.
         """
         ...
 
@@ -33,7 +35,8 @@ class Forge(Protocol):
         """The deployment to track for an MR that left the open list, if it merged.
 
         `entry` is the MR's last `open_merge_requests` entry. The result keeps its
-        `title`, `task` and `web_url`, plus whatever `deploy_states` needs.
+        `title`, `task`, `task_url` and `web_url`, plus whatever `deploy_states`
+        needs.
         """
         ...
 

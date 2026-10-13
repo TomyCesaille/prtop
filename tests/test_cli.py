@@ -11,6 +11,7 @@ from prtop import model
 from prtop.cli import run_check, set_tab_color, watch
 from prtop.config import Config
 from prtop.model import DeployState, ForgeError
+from prtop.tasks import NoTasks, Task
 
 HOST = "gitlab.example.com"
 
@@ -39,7 +40,7 @@ class FakeForge:
         self.states: dict[str, DeployState] = {}
         self.asked_about_merges: list[int] = []
 
-    def open_merge_requests(self):
+    def open_merge_requests(self, tasks):
         if self.error:
             raise ForgeError(self.error)
         return dict(self.open)
@@ -62,8 +63,8 @@ class Check(unittest.TestCase):
         self.config = Config(state_file=self.state_file)
         self.forge = FakeForge()
 
-    def check(self, config=None):
-        return run_check(config or self.config, self.forge)
+    def check(self, config=None, tasks=None):
+        return run_check(config or self.config, self.forge, tasks or NoTasks())
 
     def saved(self):
         return json.loads(self.state_file.read_text())
@@ -122,6 +123,22 @@ class Check(unittest.TestCase):
         self.check(config)
         self.assertEqual(self.forge.asked_about_merges, [])
 
+    def test_without_a_task_source_the_task_column_is_left_out(self):
+        self.forge.open = {"frontend!1": entry(1)}
+        self.assertNotIn("Task", self.check().text.splitlines()[0])
+
+    def test_a_task_source_brings_the_task_column(self):
+        class EveryMrIsOneTask:
+            shows_column = True
+
+            def resolve(self, branch, closing_issues):
+                return Task("PROJ-1 the task")
+
+        self.forge.open = {"frontend!1": dict(entry(1), task="PROJ-1 the task")}
+        report = self.check(tasks=EveryMrIsOneTask())
+        self.assertIn("Task", report.text.splitlines()[0])
+        self.assertIn("PROJ-1 the task", report.text)
+
     def test_an_mr_on_you_calls_for_action(self):
         self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True)}
         self.assertTrue(self.check().action_needed)
@@ -155,7 +172,7 @@ class Watch(unittest.TestCase):
         self.change_after = change_after
         out = io.StringIO()
         with redirect_stdout(out):
-            code = watch(self.config, self.forge, 300, cap, sleep=self.sleep, clock=lambda: self.now)
+            code = watch(self.config, self.forge, NoTasks(), 300, cap, sleep=self.sleep, clock=lambda: self.now)
         return code, out.getvalue()
 
     def test_it_exits_with_the_report_as_soon_as_something_changes(self):

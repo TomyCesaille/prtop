@@ -18,6 +18,7 @@ from prtop.report import (
     RUNNING,
     STATUS_WIDTH,
     TITLE_MAX,
+    TITLE_MAX_ALONE,
     Row,
     by_severity,
     deploy_signal,
@@ -335,8 +336,23 @@ class TableRendering(unittest.TestCase):
         self.assertEqual(lines[1], lines[3])
 
     def test_the_mark_column_header_is_blank(self):
-        self.assertEqual(HEADERS[0], "")
-        self.assertEqual(len(HEADERS), len(Row._fields))
+        self.assertEqual(render_report([row(ACT)]).splitlines()[0].split("|")[1].strip(), "")
+        self.assertEqual(render_report([row(ACT)], show_task=False).splitlines()[0].split("|")[1].strip(), "")
+
+    def test_without_a_task_source_the_task_column_is_left_out(self):
+        table = render_report([row(ACT, task="THE-TASK")], show_task=False)
+        self.assertNotIn("Task", table.splitlines()[0])
+        self.assertNotIn("THE-TASK", table)
+
+    def test_without_a_task_column_the_title_takes_its_width(self):
+        with_task = render_report([row(ACT, title="x" * 200, task="y" * 200)])
+        alone = render_report([row(ACT, title="x" * 200)], show_task=False)
+        self.assertEqual(display_width(with_task.splitlines()[0]), display_width(alone.splitlines()[0]))
+        self.assertIn("x" * TITLE_MAX_ALONE, alone.replace("…", "x"))
+
+    def test_a_task_with_a_link_opens_the_task(self):
+        line = render_report([row(ACT)._replace(task_url="https://x.example/t")]).splitlines()[-1]
+        self.assertIn(hyperlink("task", "https://x.example/t"), line)
 
     def test_the_pr_title_column_comes_before_the_task_column(self):
         self.assertEqual(HEADERS[1:3], ("PR title", "Task"))
