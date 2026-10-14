@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from prtop import model
-from prtop.cli import run_check, set_tab_color, watch
+from prtop.cli import check, run_check, watch
 from prtop.config import Config
 from prtop.model import DeployState, ForgeError
 from prtop.tasks import NoTasks, Task
@@ -198,20 +198,24 @@ class Watch(unittest.TestCase):
 
 
 class TabColor(unittest.TestCase):
-    def written(self, mode, environ):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state_file = Path(tmp.name) / "state.json"
+        self.forge = FakeForge()
+        self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True)}
+
+    def printed(self, **settings):
         out = io.StringIO()
         with redirect_stdout(out):
-            set_tab_color(True, mode, environ)
+            check(Config(state_file=self.state_file, **settings), self.forge, NoTasks())
         return out.getvalue()
 
-    def test_auto_colors_the_tab_in_iterm(self):
-        self.assertIn("\033]6;1;bg;red;brightness;255\a", self.written("auto", {"TERM_PROGRAM": "iTerm.app"}))
+    def test_the_tab_keeps_its_color_unless_asked(self):
+        self.assertNotIn("\033]6;", self.printed())
 
-    def test_auto_writes_nothing_in_other_terminals(self):
-        self.assertEqual(self.written("auto", {"TERM_PROGRAM": "Apple_Terminal"}), "")
-
-    def test_off_writes_nothing_even_in_iterm(self):
-        self.assertEqual(self.written("off", {"TERM_PROGRAM": "iTerm.app"}), "")
+    def test_the_iterm_tab_turns_orange_while_an_mr_is_on_you(self):
+        self.assertIn("\033]6;1;bg;red;brightness;255\a", self.printed(iterm_tab_color=True))
 
 
 if __name__ == "__main__":

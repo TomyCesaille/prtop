@@ -41,7 +41,8 @@ class Config:
     deploy_job_pattern: str = r"deploy.*prod|prod.*deploy"
     # The one job among those whose success means the app itself shipped.
     primary_deploy_job_pattern: str = r"^deploy[_-]production$"
-    tab_color: str = "auto"
+    # iTerm2 only: an orange tab while an open MR is on you, green otherwise.
+    iterm_tab_color: bool = False
 
 
 def _text(name: str, value: str) -> str:
@@ -90,7 +91,7 @@ _SETTINGS: dict[str, tuple[str, Callable[[str, str], object]]] = {
     "DEPLOY_TRACKING": ("deploy_tracking", _flag),
     "DEPLOY_JOB_PATTERN": ("deploy_job_pattern", _regex),
     "PRIMARY_DEPLOY_JOB_PATTERN": ("primary_deploy_job_pattern", _regex),
-    "TAB_COLOR": ("tab_color", _one_of("auto", "iterm", "off")),
+    "ITERM_TAB_COLOR": ("iterm_tab_color", _flag),
 }
 
 

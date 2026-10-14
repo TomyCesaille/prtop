@@ -4,10 +4,9 @@ wait for the report to change."""
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import datetime
 from typing import NamedTuple
 
@@ -100,16 +99,10 @@ def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
 
 # ---------- Terminal tab color ----------
 
-def _is_iterm(environ: Mapping[str, str]) -> bool:
-    return environ.get("TERM_PROGRAM") == "iTerm.app" or environ.get("LC_TERMINAL") == "iTerm2"
-
-
-def set_tab_color(action_needed: bool, mode: str, environ: Mapping[str, str] = os.environ) -> None:
-    """Orange while an open MR is on you, green otherwise — a convenience
-    duplicate of the `!` block at the top of the table, never the only place a
-    state is reported."""
-    if mode == "off" or (mode == "auto" and not _is_iterm(environ)):
-        return
+def set_tab_color(action_needed: bool) -> None:
+    """iTerm2 tab color: orange while an open MR is on you, green otherwise — a
+    convenience duplicate of the `!` block at the top of the table, never the
+    only place a state is reported."""
     r, g, b = (255, 140, 0) if action_needed else (0, 180, 0)
     sys.stdout.write(
         f"\033]6;1;bg;red;brightness;{r}\a"
@@ -142,7 +135,8 @@ def check(config: Config, forge: Forge, tasks: TaskSource) -> None:
     report = run_check(config, forge, tasks)
     print()
     print(report.text, flush=True)
-    set_tab_color(report.action_needed, config.tab_color)
+    if config.iterm_tab_color:
+        set_tab_color(report.action_needed)
 
 
 def loop(config: Config, forge: Forge, tasks: TaskSource, interval: int) -> int:

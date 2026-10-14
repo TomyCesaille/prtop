@@ -65,8 +65,8 @@ class Settings(unittest.TestCase):
         self.assertIn("PRTOP_GITLAB_HOTS", stderr.getvalue())
 
     def test_a_value_outside_the_allowed_ones_names_the_setting(self):
-        with self.assertRaisesRegex(ConfigError, "PRTOP_TAB_COLOR"):
-            self.load(PRTOP_TAB_COLOR="purple")
+        with self.assertRaisesRegex(ConfigError, "PRTOP_TASK_SOURCE"):
+            self.load(PRTOP_TASK_SOURCE="trello")
 
     def test_a_broken_job_pattern_names_the_setting(self):
         with self.assertRaisesRegex(ConfigError, "PRTOP_DEPLOY_JOB_PATTERN"):
