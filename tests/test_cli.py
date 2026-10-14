@@ -39,6 +39,7 @@ class FakeForge:
         self.merged: set[int] = set()
         self.states: dict[str, DeployState] = {}
         self.asked_about_merges: list[int] = []
+        self.merge_check_error: str | None = None
 
     def open_merge_requests(self, tasks):
         if self.error:
@@ -47,6 +48,8 @@ class FakeForge:
 
     def merged_deployment(self, entry):
         self.asked_about_merges.append(entry["iid"])
+        if self.merge_check_error:
+            raise ForgeError(self.merge_check_error)
         if entry["iid"] not in self.merged:
             return None
         return {"title": entry["title"], "task": "", "web_url": entry["web_url"]}
@@ -114,6 +117,22 @@ class Check(unittest.TestCase):
         self.assertTrue(report.action_needed)
         self.assertEqual(self.forge.asked_about_merges, [])
         self.assertIn("frontend!1", self.saved()["open_mrs"])
+
+    def test_a_merge_the_forge_could_not_confirm_is_asked_about_again_on_the_next_run(self):
+        self.forge.open = {"frontend!1": entry(1, title="feat: the merged one")}
+        self.check()
+        self.forge.open, self.forge.merged = {}, {1}
+        self.forge.merge_check_error = "502 Bad Gateway"
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            report = self.check()
+        self.assertIn("frontend!1: 502 Bad Gateway", stderr.getvalue())
+        self.assertNotIn("feat: the merged one", report.text)
+
+        self.forge.merge_check_error = None
+        self.assertIn("feat: the merged one", self.check().text)
+        self.assertIn("frontend!1", self.saved()["deployments"])
+        self.assertEqual(self.saved()["open_mrs"], {})
 
     def test_without_deploy_tracking_merges_are_not_followed(self):
         config = Config(state_file=self.state_file, deploy_tracking=False)

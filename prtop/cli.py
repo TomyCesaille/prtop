@@ -39,16 +39,23 @@ class Report(NamedTuple):
     action_needed: bool
 
 
-def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict) -> None:
+def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict) -> dict:
     """MRs that left the open list since the last check: each one that merged
-    starts being tracked on its way to production."""
+    starts being tracked on its way to production.
+
+    Returns the ones the forge could not answer for. They belong in the next
+    baseline, so the next run asks about them again."""
+    unconfirmed = {}
     for key in sorted(previous.keys() - current.keys()):
         try:
             deployment = forge.merged_deployment(previous[key])
-        except ForgeError:
+        except ForgeError as e:
+            print(f"prtop: {key}: {e}", file=sys.stderr)
+            unconfirmed[key] = previous[key]
             continue
         if deployment is not None:
             deployments[key] = deployment
+    return unconfirmed
 
 
 def deployment_rows(forge: Forge, deployments: dict) -> list[Row]:
@@ -79,7 +86,7 @@ def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
     # table: a status this run could not confirm is not one to report.
     known = previous if error is not None else open_mrs
     if config.deploy_tracking:
-        track_merges(forge, known, previous, deployments)
+        known = {**known, **track_merges(forge, known, previous, deployments)}
     state["open_mrs"] = known
 
     open_rows = (
