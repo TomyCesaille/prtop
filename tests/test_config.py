@@ -72,6 +72,10 @@ class Settings(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "PRTOP_DEPLOY_JOB_PATTERN"):
             self.load(PRTOP_DEPLOY_JOB_PATTERN="deploy(")
 
+    def test_an_env_file_is_read_as_utf8_whatever_the_locale(self):
+        self.write_env_file("").write_bytes("PRTOP_GITLAB_GROUP=équipe\n".encode())
+        self.assertEqual(self.load().gitlab_group, "équipe")
+
     def test_a_line_without_a_value_points_at_its_line_number(self):
         path = self.write_env_file("PRTOP_GITLAB_HOST=gitlab.example.com\nPRTOP_GITLAB_GROUP\n")
         with self.assertRaisesRegex(ConfigError, ":2:"):

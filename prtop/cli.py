@@ -4,6 +4,7 @@ wait for the report to change."""
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 import time
 from collections.abc import Callable
@@ -201,7 +202,16 @@ def watch(
         sleep(interval)
 
 
+def _utf8_output() -> None:
+    # The table carries emoji, which a Windows code page cannot encode: output
+    # piped to another program would otherwise fail there.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     parser = argparse.ArgumentParser(
         prog="prtop",
         description="One table of the merge requests assigned to you, from review to production.",

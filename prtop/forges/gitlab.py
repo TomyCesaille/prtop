@@ -52,7 +52,7 @@ REVIEW_STATUS = {
 
 def _run(cmd: list[str]) -> str:
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        res = subprocess.run(cmd, capture_output=True, encoding="utf-8", check=False)
     except FileNotFoundError:
         raise ForgeError("glab is not installed: https://gitlab.com/gitlab-org/cli") from None
     if res.returncode != 0:

@@ -1,8 +1,12 @@
 """`prtop --demo`, the report a screenshot is taken from."""
 
 import io
+import os
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 
 from prtop.cli import main
 from prtop.demo import demo_report
@@ -25,6 +29,17 @@ class Demo(unittest.TestCase):
         with redirect_stdout(out):
             self.assertEqual(main(["--demo"]), 0)
         self.assertIn("PR title", out.getvalue())
+
+    def test_its_emoji_survive_a_pipe_on_a_windows_code_page(self):
+        run = subprocess.run(
+            [sys.executable, "-m", "prtop", "--demo"],
+            capture_output=True,
+            cwd=Path(__file__).parents[1],
+            env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+            check=False,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr.decode(errors="replace"))
+        self.assertIn("👀 awaiting review", run.stdout.decode("utf-8"))
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ _SETTINGS: dict[str, tuple[str, Callable[[str, str], object]]] = {
 
 def read_env_file(path: Path) -> dict[str, str]:
     values = {}
-    for number, raw in enumerate(path.read_text().splitlines(), 1):
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
