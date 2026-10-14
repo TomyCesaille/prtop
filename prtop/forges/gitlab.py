@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 from prtop import model
@@ -199,7 +199,7 @@ class GitLab:
             "project_path": project_path,
             "iid": iid,
             "web_url": full.get("web_url"),
-            "last_checked": datetime.now(timezone.utc).isoformat(),
+            "last_checked": datetime.now(UTC).isoformat(),
         }
 
     def _discussions(self, base: str) -> list[dict]:
