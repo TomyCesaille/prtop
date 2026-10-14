@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from prtop.config import ConfigError, load_config, read_env_file
+from prtop.config import ConfigError, config_file, default_state_file, load_config, read_env_file
 
 
 class Settings(unittest.TestCase):
@@ -32,7 +32,11 @@ class Settings(unittest.TestCase):
         config = self.load()
         self.assertEqual(config.gitlab_host, "gitlab.com")
         self.assertIsNone(config.gitlab_group)
-        self.assertEqual(config.state_file, self.root / "state" / "prtop" / "state.json")
+        self.assertEqual(config.state_file, self.root / "state" / "prtop" / "gitlab.com.json")
+
+    def test_each_instance_keeps_a_state_file_of_its_own(self):
+        state_file = self.load(PRTOP_GITLAB_HOST="gitlab.example.com:8443").state_file
+        self.assertEqual(state_file.name, "gitlab.example.com_8443.json")
 
     def test_the_env_file_is_read_from_the_config_directory(self):
         self.write_env_file("# my instance\n\nexport PRTOP_GITLAB_HOST='gitlab.example.com'\nPRTOP_GITLAB_GROUP=\"acme\"\n")
@@ -80,6 +84,31 @@ class Settings(unittest.TestCase):
         path = self.write_env_file("PRTOP_GITLAB_HOST=gitlab.example.com\nPRTOP_GITLAB_GROUP\n")
         with self.assertRaisesRegex(ConfigError, ":2:"):
             read_env_file(path)
+
+
+WINDOWS = {"APPDATA": "C:/Users/me/AppData/Roaming", "LOCALAPPDATA": "C:/Users/me/AppData/Local"}
+
+
+class Locations(unittest.TestCase):
+    def test_on_macos_and_linux_files_follow_the_xdg_defaults(self):
+        for platform in ("darwin", "linux"):
+            self.assertEqual(config_file({}, platform), Path.home() / ".config" / "prtop" / ".env")
+            self.assertEqual(
+                default_state_file({}, "gitlab.com", platform),
+                Path.home() / ".local" / "state" / "prtop" / "gitlab.com.json",
+            )
+
+    def test_on_windows_settings_roam_and_state_stays_on_the_machine(self):
+        self.assertEqual(config_file(WINDOWS, "win32"), Path("C:/Users/me/AppData/Roaming/prtop/.env"))
+        self.assertEqual(
+            default_state_file(WINDOWS, "gitlab.com", "win32"),
+            Path("C:/Users/me/AppData/Local/prtop/gitlab.com.json"),
+        )
+
+    def test_xdg_directories_win_on_windows_too(self):
+        environ = {**WINDOWS, "XDG_CONFIG_HOME": "D:/cfg", "XDG_STATE_HOME": "D:/state"}
+        self.assertEqual(config_file(environ, "win32"), Path("D:/cfg/prtop/.env"))
+        self.assertEqual(default_state_file(environ, "gitlab.com", "win32"), Path("D:/state/prtop/gitlab.com.json"))
 
 
 if __name__ == "__main__":

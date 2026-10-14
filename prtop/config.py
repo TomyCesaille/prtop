@@ -1,9 +1,20 @@
-"""Settings: `PRTOP_*` variables, from the environment first and an env file second.
+r"""Settings: `PRTOP_*` variables, from the environment first and an env file second.
 
-The env file is `$XDG_CONFIG_HOME/prtop/.env` (`~/.config/prtop/.env`), or
-whatever `PRTOP_CONFIG_FILE` names. It holds `KEY=VALUE` lines; blank lines and
-`#` comments are skipped, a leading `export ` and quotes around the value are
-dropped. A variable set to an empty value counts as unset.
+The env file holds `KEY=VALUE` lines; blank lines and `#` comments are skipped, a
+leading `export ` and quotes around the value are dropped. A variable set to an
+empty value counts as unset.
+
+Where prtop keeps its files, unless `PRTOP_CONFIG_FILE` / `PRTOP_STATE_FILE` say
+otherwise:
+
+| | macOS and Linux | Windows |
+|---|---|---|
+| env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
+| state | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
+platform. On Windows the settings roam with the user's profile, while the state
+describes what this machine last saw, so it stays local.
 """
 
 from __future__ import annotations
@@ -111,16 +122,26 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def config_file(environ: Mapping[str, str]) -> Path:
+def config_file(environ: Mapping[str, str], platform: str = sys.platform) -> Path:
     if explicit := environ.get(CONFIG_FILE_VAR):
         return Path(explicit).expanduser()
-    base = environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
-    return Path(base) / "prtop" / ".env"
+    if base := environ.get("XDG_CONFIG_HOME"):
+        return Path(base) / "prtop" / ".env"
+    if platform == "win32":
+        return Path(environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "prtop" / ".env"
+    return Path.home() / ".config" / "prtop" / ".env"
 
 
-def default_state_file(environ: Mapping[str, str]) -> Path:
-    base = environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return Path(base) / "prtop" / "state.json"
+def default_state_file(environ: Mapping[str, str], host: str, platform: str = sys.platform) -> Path:
+    """One file per instance, so pointing prtop at another host, or at two in
+    turn, never reads one instance's MRs as having vanished from the other."""
+    if base := environ.get("XDG_STATE_HOME"):
+        directory = Path(base) / "prtop"
+    elif platform == "win32":
+        directory = Path(environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "prtop"
+    else:
+        directory = Path.home() / ".local" / "state" / "prtop"
+    return directory / f"{re.sub(r'[^A-Za-z0-9.-]', '_', host)}.json"
 
 
 def load_config(environ: Mapping[str, str] = os.environ) -> Config:
@@ -138,5 +159,7 @@ def load_config(environ: Mapping[str, str] = os.environ) -> Config:
             field, parse = _SETTINGS[name]
             settings[field] = parse(key, value)
 
-    settings.setdefault("state_file", default_state_file(environ))
+    if "state_file" not in settings:
+        host = settings.get("gitlab_host", Config.gitlab_host)
+        settings["state_file"] = default_state_file(environ, host)
     return Config(**settings)  # type: ignore[arg-type]
