@@ -173,10 +173,14 @@ class GitLab:
             return None
         iid = summary["iid"]
         base = f"projects/{quote(project_path, safe='')}/merge_requests/{iid}"
-        full = self.api(base)
+        full = self.api(f"{base}?include_diverged_commits_count=true")
         approvals = self.api(f"{base}/approvals")
 
         detailed = full.get("detailed_merge_status", "unknown")
+        # GitLab reports `not_approved` ahead of `need_rebase`, so an MR in review
+        # that fell behind its target would only say so once approved.
+        if detailed == "not_approved" and not full.get("draft") and full.get("diverged_commits_count"):
+            detailed = "need_rebase"
         threads_await_user = True
         # The extra calls earn their place only when threads are what blocks the merge.
         if detailed == "discussions_not_resolved":

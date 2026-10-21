@@ -22,6 +22,7 @@ HOST = "gitlab.example.com"
 PROJECT = "acme/web/frontend"
 ENCODED = "acme%2Fweb%2Ffrontend"
 MR = f"projects/{ENCODED}/merge_requests/7"
+MR_DETAIL = f"{MR}?include_diverged_commits_count=true"
 ME = "john.doe"
 QUERY = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100"
 LIST_ALL = f"merge_requests?{QUERY}"
@@ -56,7 +57,7 @@ def thread(*authors, resolved=False):
 def open_mr(detailed_status="not_approved", **fields):
     return {
         LIST_ALL: [{"iid": 7, "references": {"full": f"{PROJECT}!7"}}],
-        MR: {"title": "feat: x", "detailed_merge_status": detailed_status,
+        MR_DETAIL: {"title": "feat: x", "detailed_merge_status": detailed_status,
              "web_url": f"https://{HOST}/{PROJECT}/-/merge_requests/7", **fields},
         f"{MR}/approvals": {"approved": False, "approved_by": []},
     }
@@ -113,6 +114,20 @@ class OpenMergeRequests(unittest.TestCase):
         entry = FakeGitLab(open_mr()).open_merge_requests(NoTasks())["frontend!7"]
         self.assertEqual(entry["status"], model.AWAITING_REVIEW)
         self.assertEqual(entry["web_url"], f"https://{HOST}/{PROJECT}/-/merge_requests/7")
+
+    def test_an_mr_in_review_that_fell_behind_its_target_needs_a_rebase(self):
+        entry = FakeGitLab(open_mr(diverged_commits_count=1)).open_merge_requests(NoTasks())["frontend!7"]
+        self.assertEqual(entry["status"], model.REBASE_NEEDED)
+
+    def test_a_draft_behind_its_target_stays_a_draft(self):
+        forge = FakeGitLab(open_mr("draft_status", draft=True, diverged_commits_count=3))
+        entry = forge.open_merge_requests(NoTasks())["frontend!7"]
+        self.assertEqual(entry["status"], model.DRAFT)
+
+    def test_reviewer_feedback_outranks_a_branch_behind_its_target(self):
+        forge = FakeGitLab(open_mr("requested_changes", diverged_commits_count=2))
+        entry = forge.open_merge_requests(NoTasks())["frontend!7"]
+        self.assertEqual(entry["status"], model.CHANGES_REQUESTED)
 
     def test_a_merge_status_gitlab_adds_later_passes_through_raw(self):
         entry = FakeGitLab(open_mr("some_status_from_the_future")).open_merge_requests(NoTasks())["frontend!7"]
