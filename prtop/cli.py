@@ -1,43 +1,44 @@
-"""The `prtop` command: one check by default, `--loop` to repeat it, `watch` to
-wait for the report to change."""
+"""The `prtop` command.
+
+In a terminal it holds the screen and fetches again every few seconds, the way
+`htop` shows processes. When its output goes anywhere else — a pipe, a file, an
+agent — it prints the table and exits. `prtop watch` checks until the report
+changes, for an agent to be woken by.
+"""
 
 from __future__ import annotations
 
 import argparse
 import io
+import os
 import sys
 import time
 from collections.abc import Callable
+from contextlib import redirect_stderr
 from datetime import datetime
-from typing import NamedTuple
 
-from prtop import __version__, model
+from prtop import __version__, live, model
 from prtop.config import Config, ConfigError, load_config
 from prtop.demo import demo_report
 from prtop.forges import Forge, make_forge
 from prtop.model import ForgeError
 from prtop.report import (
     ACT,
+    Report,
     Row,
     assemble_rows,
     by_severity,
     deploy_row,
     open_row,
     plain,
-    render_report,
     unreachable_row,
 )
 from prtop.state import load_state, save_state
 from prtop.tasks import TaskSource, task_source
+from prtop.terminal import fullscreen
 
-DEFAULT_LOOP_INTERVAL = 300
+DEFAULT_WATCH_DELAY = 300
 DEFAULT_WATCH_CAP = 7200
-
-
-class Report(NamedTuple):
-    text: str
-    # Whether an open MR is on you now. Deployment progress never sets it.
-    action_needed: bool
 
 
 def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict) -> dict:
@@ -97,12 +98,10 @@ def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
     deploy_rows = deployment_rows(forge, deployments) if config.deploy_tracking else []
     save_state(config.state_file, state)
 
-    rows = assemble_rows(open_rows, deploy_rows)
-    text = render_report(rows, tasks.shows_column) if rows else "No open merge requests or pending deploys."
-
     # A forge the run could not read counts too: its row is marked `!`, since
     # green would otherwise claim all-clear over MRs nobody saw.
-    return Report(text, any(row.mark == ACT for row in open_rows))
+    action_needed = any(row.mark == ACT for row in open_rows)
+    return Report(assemble_rows(open_rows, deploy_rows), tasks.shows_column, action_needed)
 
 
 # ---------- Terminal tab color ----------
@@ -120,48 +119,59 @@ def set_tab_color(action_needed: bool) -> None:
     sys.stdout.flush()
 
 
-# ---------- Wall-clock alignment ----------
-
-def next_tick_time(interval: int) -> float:
-    """Epoch time of the next multiple of `interval` seconds past the local hour.
-
-    With interval=300, ticks land at :00, :05, :10, … local time (in any
-    timezone offset by a whole number of minutes from UTC).
-    """
-    return (int(time.time()) // interval + 1) * interval
-
-
-def sleep_until_next_tick(interval: int) -> None:
-    next_tick = next_tick_time(interval)
-    print(f"\nnext tick @ {datetime.fromtimestamp(next_tick):%Y-%m-%d %H:%M}", flush=True)
-    time.sleep(next_tick - time.time())
+def tab_color_hook(config: Config) -> Callable[[Report], None] | None:
+    """What the live view does with each report beside showing it."""
+    if not config.iterm_tab_color:
+        return None
+    return lambda report: set_tab_color(report.action_needed)
 
 
 # ---------- Entry point ----------
 
-def check(config: Config, forge: Forge, tasks: TaskSource) -> None:
-    report = run_check(config, forge, tasks)
-    print()
-    print(report.text, flush=True)
-    if config.iterm_tab_color:
-        set_tab_color(report.action_needed)
+def batch(
+    fetch: Callable[[], Report], delay: int, iterations: int, *, sleep: Callable[[float], None] = time.sleep
+) -> int:
+    """The table, `iterations` times over, for output that is not a terminal."""
+    for i in range(iterations):
+        if i:
+            sleep(delay)
+        try:
+            report = fetch()
+        except ForgeError as e:
+            print(f"prtop: {e}", file=sys.stderr)
+            return 1
+        print()
+        print(report.text, flush=True)
+    return 0
 
 
-def loop(config: Config, forge: Forge, tasks: TaskSource, interval: int) -> int:
-    print(f"Looping every {interval}s, aligned to wall-clock ticks. Ctrl+C to stop.")
+def show_live(
+    fetch: Callable[[], Report],
+    title: str,
+    delay: int,
+    max_iterations: int | None,
+    on_report: Callable[[Report], None] | None,
+) -> int:
+    messages = live.Messages()
+    fetcher = live.Fetcher(fetch, messages.take)
+    view = None
     try:
-        # Kick off with an immediate check — unless the next aligned tick is under
-        # 2s away, in which case wait for it rather than run twice back-to-back.
-        if next_tick_time(interval) - time.time() < 2:
-            sleep_until_next_tick(interval)
-        while True:
-            try:
-                check(config, forge, tasks)
-            except ForgeError as e:
-                print(f"prtop (continuing): {e}", file=sys.stderr)
-            sleep_until_next_tick(interval)
+        with fullscreen() as terminal, redirect_stderr(messages):
+            view = live.run(fetcher, terminal, title, delay, max_iterations, on_report=on_report)
     except KeyboardInterrupt:
-        print("\nStopped.")
+        pass
+    if view is not None and view.finished:
+        if view.report is not None:
+            print(view.report.text)
+        for message in view.messages:
+            print(message, file=sys.stderr)
+    if fetcher.busy:
+        # A fetch still in flight would hold the exit until the forge answers.
+        # The state file is replaced in one step, so cutting it short leaves
+        # the previous state whole.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     return 0
 
 
@@ -169,13 +179,13 @@ def watch(
     config: Config,
     forge: Forge,
     tasks: TaskSource,
-    interval: int,
+    delay: int,
     cap: int,
     *,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
-    """Check every `interval` seconds and exit as soon as the report changes, so
+    """Check every `delay` seconds and exit as soon as the report changes, so
     a backgrounded run re-invokes the agent that started it exactly when
     something needs attention. The first check only records a baseline.
 
@@ -199,7 +209,7 @@ def watch(
         if clock() - started >= cap:
             print(f"TIMEOUT after {cap}s with no PR activity", flush=True)
             return 0
-        sleep(interval)
+        sleep(delay)
 
 
 def _utf8_output() -> None:
@@ -210,21 +220,36 @@ def _utf8_output() -> None:
             stream.reconfigure(encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
-    _utf8_output()
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} is not 1 or more")
+    return value
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="prtop",
-        description="One table of the merge requests assigned to you, from review to production.",
+        description=(
+            "The merge requests assigned to you, from review to production. In a terminal "
+            "prtop fills the screen and fetches again every few seconds, like htop; "
+            "anywhere else it prints one table."
+        ),
+        epilog="keys: q quit, h help, Ctrl+L fetch now, Z pause or resume",
     )
     parser.add_argument("--version", action="version", version=f"prtop {__version__}")
     parser.add_argument(
-        "--loop", type=int, nargs="?", const=DEFAULT_LOOP_INTERVAL, default=None,
-        metavar="SECONDS",
-        help=f"repeat forever, aligned to wall-clock ticks (default {DEFAULT_LOOP_INTERVAL}s)",
+        "-d", "--delay", type=positive_int, metavar="SECONDS",
+        help=f"seconds between fetches (default {live.DEFAULT_DELAY}, or {DEFAULT_WATCH_DELAY} for watch)",
+    )
+    parser.add_argument(
+        "-n", "--max-iterations", type=positive_int, metavar="N",
+        help="stop after N fetches, leaving the last table on screen "
+        "(default: until q in a terminal, one fetch anywhere else)",
     )
     parser.add_argument(
         "--demo", action="store_true",
-        help="print the report for made-up merge requests, without reading any forge",
+        help="show made-up merge requests, without reading any forge",
     )
     commands = parser.add_subparsers(dest="command")
     watch_parser = commands.add_parser(
@@ -234,36 +259,45 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     watch_parser.add_argument(
-        "--interval", type=int, default=DEFAULT_LOOP_INTERVAL, metavar="SECONDS",
-        help=f"seconds between checks (default {DEFAULT_LOOP_INTERVAL})",
+        "-d", "--delay", type=positive_int, default=argparse.SUPPRESS, metavar="SECONDS",
+        help=f"seconds between checks (default {DEFAULT_WATCH_DELAY})",
     )
     watch_parser.add_argument(
-        "--cap", type=int, default=DEFAULT_WATCH_CAP, metavar="SECONDS",
+        "--cap", type=positive_int, default=DEFAULT_WATCH_CAP, metavar="SECONDS",
         help=f"quiet seconds before giving up with a TIMEOUT line (default {DEFAULT_WATCH_CAP})",
     )
     args = parser.parse_args(argv)
-    if args.command == "watch" and args.loop is not None:
-        parser.error("--loop and watch are two ways to repeat; pick one")
+    if args.command == "watch" and args.max_iterations is not None:
+        parser.error("watch stops at the first change; -n does not apply to it")
+    if args.command == "watch" and args.demo:
+        parser.error("watch needs a forge to read; --demo has none")
+    if args.delay is None:
+        args.delay = DEFAULT_WATCH_DELAY if args.command == "watch" else live.DEFAULT_DELAY
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
+    args = parse_args(argv)
+    on_report = None
     if args.demo:
-        print()
-        print(demo_report())
-        return 0
+        fetch, title = demo_report, "demo"
+    else:
+        try:
+            config = load_config()
+            tasks = task_source(config)
+        except ConfigError as e:
+            print(f"prtop: {e}", file=sys.stderr)
+            return 2
+        forge = make_forge(config)
+        if args.command == "watch":
+            return watch(config, forge, tasks, args.delay, args.cap)
 
-    try:
-        config = load_config()
-        tasks = task_source(config)
-    except ConfigError as e:
-        print(f"prtop: {e}", file=sys.stderr)
-        return 2
-    forge = make_forge(config)
+        def fetch() -> Report:
+            return run_check(config, forge, tasks)
 
-    if args.command == "watch":
-        return watch(config, forge, tasks, args.interval, args.cap)
-    if args.loop is not None:
-        return loop(config, forge, tasks, args.loop)
-    try:
-        check(config, forge, tasks)
-    except ForgeError as e:
-        print(f"prtop: {e}", file=sys.stderr)
-        return 1
-    return 0
+        title, on_report = forge.host, tab_color_hook(config)
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return show_live(fetch, title, args.delay, args.max_iterations, on_report)
+    return batch(fetch, args.delay, args.max_iterations or 1)

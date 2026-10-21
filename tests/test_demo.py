@@ -15,11 +15,11 @@ from prtop.report import MARK_ORDER, plain
 
 class Demo(unittest.TestCase):
     def test_it_shows_every_severity_mark(self):
-        marks = {line.split("|")[1].strip() for line in plain(demo_report()).splitlines()[2:]}
+        marks = {line.split("|")[1].strip() for line in plain(demo_report().text).splitlines()[2:]}
         self.assertLessEqual(set(MARK_ORDER), marks)
 
     def test_it_shows_open_and_merged_rows_with_their_tasks(self):
-        table = plain(demo_report())
+        table = plain(demo_report().text)
         self.assertIn("mergeable, approved", table)
         self.assertIn("awaiting prod trigger", table)
         self.assertIn("PROJ-150 Single sign-on", table)

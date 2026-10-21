@@ -122,16 +122,41 @@ def plain(text: str) -> str:
     return _OSC_RE.sub("", text)
 
 
+def _cells(char: str) -> int:
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+
 def display_width(text: str) -> int:
     """Terminal cell width: OSC escape sequences (hyperlinks) occupy no cells,
     and East-Asian-wide chars (incl. emoji) count as 2 so the emoji-bearing
     Status column stays aligned. `str.ljust` can't do either — it counts a
     single-codepoint emoji as 1 while the terminal renders it 2 cells wide."""
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in plain(text))
+    return sum(map(_cells, plain(text)))
 
 
 def truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
+
+
+_LINK_END = "\033]8;;\a"
+_CELL_RE = re.compile(f"{_OSC_RE.pattern}|.", re.DOTALL)
+
+
+def clip(text: str, width: int) -> str:
+    """`text` cut to `width` terminal cells, ending on `…` when cut, with a
+    hyperlink the cut falls inside closed again."""
+    if display_width(text) <= width:
+        return text
+    out, used, linked = [], 0, False
+    for token in _CELL_RE.findall(text):
+        if token.startswith("\033]"):
+            linked = token != _LINK_END
+        elif used + _cells(token) > width - 1:
+            break
+        else:
+            used += _cells(token)
+        out.append(token)
+    return "".join(out) + "…" + (_LINK_END if linked else "")
 
 
 def linked_mr_id(entry: dict, mr_id: str) -> str:
@@ -252,20 +277,44 @@ def render_table(
     return "\n".join([line(headers), sep, *(sep if r is None else line(r) for r in rows)])
 
 
-def _task_cell(row: Row) -> str:
-    label = truncate(row.task, TASK_MAX)
+def _task_cell(row: Row, task_max: int) -> str:
+    label = truncate(row.task, task_max)
     return hyperlink(label, row.task_url) if row.task_url else label
 
 
-def render_report(rows: Sequence[Row | None], show_task: bool = True) -> str:
+def render_report(
+    rows: Sequence[Row | None],
+    show_task: bool = True,
+    *,
+    title_max: int | None = None,
+    task_max: int = TASK_MAX,
+) -> str:
+    """`title_max` and `task_max` cap the two free-text columns, which the other
+    columns' fixed widths leave as the only ones to narrow."""
     if not show_task:
+        title_max = title_max or TITLE_MAX_ALONE
         cells = [
-            None if r is None else (r.mark, truncate(r.title, TITLE_MAX_ALONE), r.pr, r.status)
+            None if r is None else (r.mark, truncate(r.title, title_max), r.pr, r.status)
             for r in rows
         ]
         return render_table(HEADERS_WITHOUT_TASK, cells, MIN_WIDTHS_WITHOUT_TASK)
+    title_max = title_max or TITLE_MAX
     cells = [
-        None if r is None else (r.mark, truncate(r.title, TITLE_MAX), _task_cell(r), r.pr, r.status)
+        None if r is None else (r.mark, truncate(r.title, title_max), _task_cell(r, task_max), r.pr, r.status)
         for r in rows
     ]
     return render_table(HEADERS, cells, MIN_WIDTHS)
+
+
+NOTHING_OPEN = "No open merge requests or pending deploys."
+
+
+class Report(NamedTuple):
+    rows: list[Row | None]
+    show_task: bool
+    # Whether an open MR is on you now. Deployment progress never sets it.
+    action_needed: bool
+
+    @property
+    def text(self) -> str:
+        return render_report(self.rows, self.show_task) if self.rows else NOTHING_OPEN

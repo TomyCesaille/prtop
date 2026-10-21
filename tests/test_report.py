@@ -21,6 +21,7 @@ from prtop.report import (
     TITLE_MAX_ALONE,
     Row,
     by_severity,
+    clip,
     deploy_signal,
     display_width,
     fmt_status,
@@ -361,6 +362,14 @@ class TableRendering(unittest.TestCase):
     def test_each_cell_lands_under_its_own_header(self):
         line = render_report([row(ACT, title="THE-TITLE", task="THE-TASK")]).splitlines()[-1]
         self.assertLess(line.index("THE-TITLE"), line.index("THE-TASK"))
+
+    def test_a_line_cut_at_the_window_edge_keeps_its_link_closed(self):
+        cut = clip("ab " + hyperlink("`web!1931`", "https://x.example/1931") + " cd", 8)
+        self.assertEqual(plain(cut), "ab `web…")
+        self.assertTrue(cut.endswith("\033]8;;\a"))
+
+    def test_a_line_that_fits_is_not_cut(self):
+        self.assertEqual(clip("✅ mergeable", 12), "✅ mergeable")
 
     def test_a_long_title_is_cut_so_the_table_never_wraps(self):
         line = render_report([row(ACT, title="x" * 80)]).splitlines()[-1]

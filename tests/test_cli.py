@@ -8,9 +8,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from prtop import model
-from prtop.cli import check, run_check, watch
+from prtop.cli import batch, parse_args, run_check, tab_color_hook, watch
 from prtop.config import Config
 from prtop.model import DeployState, ForgeError
+from prtop.report import NOTHING_OPEN, Report
 from prtop.tasks import NoTasks, Task
 
 HOST = "gitlab.example.com"
@@ -73,7 +74,7 @@ class Check(unittest.TestCase):
         return json.loads(self.state_file.read_text())
 
     def test_with_nothing_open_the_report_says_so(self):
-        self.assertIn("No open merge requests", self.check().text)
+        self.assertEqual(self.check().text, NOTHING_OPEN)
 
     def test_the_first_run_records_a_baseline_without_reporting_merges(self):
         self.forge.open = {"frontend!1": entry(1)}
@@ -216,25 +217,74 @@ class Watch(unittest.TestCase):
         self.assertIn("check failed", out)
 
 
-class TabColor(unittest.TestCase):
+class Batch(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.state_file = Path(tmp.name) / "state.json"
-        self.forge = FakeForge()
-        self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True)}
+        self.sleeps = []
+        self.fetches = 0
 
-    def printed(self, **settings):
+    def fetch(self):
+        self.fetches += 1
+        return Report([], False, False)
+
+    def printed(self, iterations):
         out = io.StringIO()
         with redirect_stdout(out):
-            check(Config(state_file=self.state_file, **settings), self.forge, NoTasks())
+            code = batch(self.fetch, 30, iterations, sleep=self.sleeps.append)
+        return code, out.getvalue()
+
+    def test_output_that_is_not_a_terminal_gets_one_table_and_the_command_ends(self):
+        code, out = self.printed(1)
+        self.assertEqual((code, out.count(NOTHING_OPEN), self.sleeps), (0, 1, []))
+
+    def test_n_fetches_print_n_tables_the_delay_apart(self):
+        _, out = self.printed(3)
+        self.assertEqual((out.count(NOTHING_OPEN), self.sleeps), (3, [30, 30]))
+
+    def test_a_forge_that_does_not_answer_ends_it_with_an_error(self):
+        def down():
+            raise ForgeError("connection refused")
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(batch(down, 30, 1), 1)
+        self.assertIn("prtop: connection refused", stderr.getvalue())
+
+
+class Arguments(unittest.TestCase):
+    def test_the_view_fetches_every_30_seconds_and_watch_checks_every_5_minutes(self):
+        self.assertEqual(parse_args([]).delay, 30)
+        self.assertEqual(parse_args(["watch"]).delay, 300)
+
+    def test_the_delay_can_follow_or_precede_watch(self):
+        self.assertEqual(parse_args(["watch", "-d", "60"]).delay, 60)
+        self.assertEqual(parse_args(["-d", "60", "watch"]).delay, 60)
+
+    def test_a_fetch_count_means_nothing_to_watch(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["-n", "2", "watch"])
+
+    def test_a_delay_under_one_second_is_refused(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["-d", "0"])
+
+
+class TabColor(unittest.TestCase):
+    def printed(self, action_needed):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            tab_color_hook(Config(state_file=Path("unused"), iterm_tab_color=True))(
+                Report([], False, action_needed)
+            )
         return out.getvalue()
 
     def test_the_tab_keeps_its_color_unless_asked(self):
-        self.assertNotIn("\033]6;", self.printed())
+        self.assertIsNone(tab_color_hook(Config(state_file=Path("unused"))))
 
     def test_the_iterm_tab_turns_orange_while_an_mr_is_on_you(self):
-        self.assertIn("\033]6;1;bg;red;brightness;255\a", self.printed(iterm_tab_color=True))
+        self.assertIn("\033]6;1;bg;red;brightness;255\a", self.printed(True))
+
+    def test_the_iterm_tab_turns_green_when_nothing_is_on_you(self):
+        self.assertIn("\033]6;1;bg;green;brightness;180\a", self.printed(False))
 
 
 if __name__ == "__main__":

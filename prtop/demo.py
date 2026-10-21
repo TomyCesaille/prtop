@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from prtop import model
 from prtop.model import DeployState
-from prtop.report import assemble_rows, by_severity, deploy_row, open_row, render_report
+from prtop.report import ACT, Report, assemble_rows, by_severity, deploy_row, open_row
 
 HOST = "gitlab.example.com"
 TRACKER = "https://jira.example.com/browse"
@@ -46,7 +46,7 @@ DEPLOYMENTS = [
 ]
 
 
-def demo_report() -> str:
+def demo_report() -> Report:
     open_rows = by_severity([open_row(key, entry) for key, entry in OPEN_MRS.items()])
     deploy_rows = by_severity([deploy_row(key, entry, state) for key, entry, state in DEPLOYMENTS])
-    return render_report(assemble_rows(open_rows, deploy_rows))
+    return Report(assemble_rows(open_rows, deploy_rows), True, any(row.mark == ACT for row in open_rows))
