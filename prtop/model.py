@@ -40,6 +40,10 @@ AWAITING_TRIGGER = "awaiting_trigger"
 PROD_OTHER = "prod_other"
 CHECK_FAILED = "check_failed"
 
+# The kinds that end the tracking: the MR is in production, or its pipeline
+# finished without a production job to put it there.
+FINISHED = (SHIPPED, NO_PROD_JOB)
+
 
 class DeployState(NamedTuple):
     kind: str

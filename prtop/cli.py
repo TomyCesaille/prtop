@@ -63,7 +63,7 @@ def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict)
 def deployment_rows(forge: Forge, deployments: dict) -> list[Row]:
     rows = []
     for key, state in forge.deploy_states(deployments).items():
-        if state.kind == model.SHIPPED:
+        if state.kind in model.FINISHED:
             deployments.pop(key)
         else:
             rows.append(deploy_row(key, deployments[key], state))

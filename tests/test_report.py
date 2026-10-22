@@ -68,10 +68,11 @@ def all_status_cells():
         for approved in (False, True):
             yield fmt_status(status, approved, False)[1]
     for pipeline_status in PIPELINE_STATES:
-        yield deploy_signal(classify_pending(pipeline_status, [], PROD_JOBS, "u"))[1]
-        for job_status in JOB_STATES:
-            jobs = [{"name": "deploy_production", "status": job_status, "id": 1}]
-            yield deploy_signal(classify_pending(pipeline_status, jobs, PROD_JOBS, "u"))[1]
+        job_lists = [[]] + [[{"name": "deploy_production", "status": s, "id": 1}] for s in JOB_STATES]
+        for jobs in job_lists:
+            state = classify_pending(pipeline_status, jobs, PROD_JOBS, "u")
+            if state.kind not in model.FINISHED:
+                yield deploy_signal(state)[1]
 
 
 class SeverityMarks(unittest.TestCase):
@@ -226,8 +227,6 @@ class AccessibilityContract(unittest.TestCase):
             "⚠": {"unreachable_instance", "deploy:check_failed"},
             # One meaning, two scopes: a run failed, the whole pipeline or its prod job.
             "❌": {"deploy:pipeline_failed", "deploy:prod_failed"},
-            # The neutral dash: no state worth a glyph of its own.
-            "➖": {"deploy:no_prod_job", "deploy:prod_other"},
         }
         for glyph, states in shared.items():
             self.assertEqual(states, expected.get(glyph, set()), f"{glyph} means too many things")

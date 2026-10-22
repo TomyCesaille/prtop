@@ -125,7 +125,7 @@ def classify_pending(
 
     prod = prod_jobs.primary(jobs)
     if not prod:
-        return DeployState(model.NO_PROD_JOB, pipeline_status or "")
+        return DeployState(model.NO_PROD_JOB)
     statuses = {j.get("status") for j in prod}
     if "failed" in statuses:
         return DeployState(model.PROD_FAILED)

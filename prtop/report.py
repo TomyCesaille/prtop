@@ -58,7 +58,6 @@ _APPROVAL_IMPLIED = (model.DRAFT, model.AWAITING_REVIEW)
 DEPLOY_SIGNAL = {
     model.PIPELINE_RUNNING: (RUNNING, "⏳ pipeline {detail}"),
     model.PIPELINE_FAILED:  (ACT, "❌ pipeline failed"),
-    model.NO_PROD_JOB:      (PEOPLE, "➖ {detail}, no prod job"),
     model.PROD_FAILED:      (ACT, "❌ prod deploy failed"),
     model.PROD_DEPLOYING:   (RUNNING, "📦 prod deploying"),
     model.AWAITING_TRIGGER: (ACT, "🕹️ awaiting prod trigger"),

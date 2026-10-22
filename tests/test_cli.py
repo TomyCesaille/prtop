@@ -91,6 +91,14 @@ class Check(unittest.TestCase):
         self.assertIn("pipeline running", report.text)
         self.assertIn("frontend!1", self.saved()["deployments"])
 
+    def test_a_merge_with_no_production_job_leaves_once_its_pipeline_is_done(self):
+        self.forge.open = {"frontend!1": entry(1, title="feat: nothing to deploy")}
+        self.check()
+        self.forge.open, self.forge.merged = {}, {1}
+        self.forge.states["frontend!1"] = DeployState(model.NO_PROD_JOB)
+        self.assertNotIn("feat: nothing to deploy", self.check().text)
+        self.assertEqual(self.saved()["deployments"], {})
+
     def test_an_mr_closed_without_merging_drops_out(self):
         self.forge.open = {"frontend!1": entry(1)}
         self.check()

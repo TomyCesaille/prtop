@@ -41,7 +41,7 @@ class Forge(Protocol):
         ...
 
     def deploy_states(self, deployments: dict[str, dict]) -> dict[str, DeployState]:
-        """Where each tracked deployment stands. A `SHIPPED` one is dropped from
+        """Where each tracked deployment stands. One in `model.FINISHED` is dropped from
         tracking. May update the entries in place; they are saved with the state."""
         ...
 
