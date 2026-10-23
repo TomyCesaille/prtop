@@ -1,0 +1,304 @@
+---
+import Layout from '../layouts/Layout.astro';
+import ThemeToggle from '../components/ThemeToggle.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const session = `> prtop watch                          # in the background
+[watch] 14:05:12 no change
+[watch] 14:10:12 no change
+| ! | feat: sign in with SSO… | web!1931 | ✅ mergeable, approved |
+
+⏺ web!1931 is approved and mergeable. Merge it? 🚀`;
+
+const install = `brew install TomyCesaille/tap/prtop    # macOS, Linux
+choco install prtop                    # Windows`;
+---
+
+<Layout>
+  <a
+    class="github-corner"
+    href="https://github.com/TomyCesaille/prtop"
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="View source on GitHub"
+  >
+    <svg width="80" height="80" viewBox="0 0 250 250" aria-hidden="true">
+      <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z" class="corner-bg"></path>
+      <path
+        d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2"
+        fill="currentColor"
+        style="transform-origin: 130px 106px;"
+        class="octo-arm"
+      ></path>
+      <path
+        d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.1 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z"
+        fill="currentColor"
+      ></path>
+    </svg>
+  </a>
+
+  <header class="header">
+    <span class="logo">prtop</span>
+    <ThemeToggle />
+  </header>
+
+  <section class="hero section">
+    <h1>htop for your merge requests.</h1>
+    <p class="subtitle">Every MR assigned to you, from review to production, in one live terminal table. Leave it open in a tab, or let Claude Code watch it for you.</p>
+    <div class="badges">
+      <img src="https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff" height="20" alt="Python 3.14 or later" />
+      <a href="https://github.com/TomyCesaille/prtop/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" aria-label="prtop's MIT license">
+        <img src="https://img.shields.io/github/license/TomyCesaille/prtop" height="20" alt="license" />
+      </a>
+      <a href="https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml" target="_blank" rel="noopener noreferrer" aria-label="prtop's CI runs">
+        <img src="https://img.shields.io/github/actions/workflow/status/TomyCesaille/prtop/ci.yml?branch=main" height="20" alt="CI" />
+      </a>
+    </div>
+  </section>
+
+  <figure class="demo section">
+    <img
+      src={`${base}/prtop.gif`}
+      width="1732"
+      height="621"
+      alt="prtop in a terminal: a countdown to the next fetch, then the merge requests that changed shown in reverse video"
+    />
+    <figcaption><code>prtop --demo</code>, fetching every 4 seconds. A row that changed shows in reverse video.</figcaption>
+  </figure>
+
+  <section class="why section">
+    <h2>Why prtop?</h2>
+    <ul>
+      <li>Whose move it is, at a glance: <code>!</code> on you, <code>?</code> to look at, <code>~</code> on someone else, <code>.</code> on a machine. No colour needed.</li>
+      <li>Follows every merge to production: pipeline, manual production trigger, deploy. The row leaves once production runs it.</li>
+      <li><code>prtop watch</code> sleeps until a row changes, then exits with the new table. Claude Code wakes exactly when your MR needs it, and spends nothing while it doesn't.</li>
+      <li>Read-only. prtop never merges, rebases or triggers a job: your agent does, after asking you.</li>
+      <li>Standard-library Python and <code>glab</code>. macOS, Linux and Windows.</li>
+    </ul>
+  </section>
+
+  <section class="claude section">
+    <h2>Made for Claude Code</h2>
+    <p>Once your MR is open, Claude starts <code>prtop watch</code> in the background and goes back to work. When a reviewer approves, GitLab asks for a rebase, or production waits on its trigger, the watch exits and Claude tells you what moved, and what it can do next.</p>
+    <pre><code>{session}</code></pre>
+    <p>The <a href="https://github.com/TomyCesaille/prtop/tree/main/examples/claude-code">Claude Code setup</a> gives Claude a <code>/prs</code> command and the instructions to keep watching.</p>
+  </section>
+
+  <section class="install section">
+    <h2>Install</h2>
+    <pre><code>{install}</code></pre>
+    <p>Then sign <code>glab</code> in to your GitLab and run <code>prtop</code>.</p>
+  </section>
+
+  <footer class="footer">
+    <a href="https://github.com/TomyCesaille/prtop">GitHub</a>
+    <span class="separator">&middot;</span>
+    <a href="https://github.com/TomyCesaille/prtop#readme">README</a>
+    <span class="separator">&middot;</span>
+    <a href="https://github.com/TomyCesaille/homebrew-tap">Homebrew tap</a>
+    <span class="separator">&middot;</span>
+    Built by <a href="https://jorislacance.fr">jorislacance.fr</a>
+  </footer>
+</Layout>
+
+<style>
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2xl);
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .section {
+    margin-bottom: var(--space-2xl);
+  }
+
+  .hero h1 {
+    font-size: 32px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    line-height: 1.1;
+  }
+
+  .hero .subtitle {
+    color: var(--text-muted);
+    margin-top: var(--space-sm);
+  }
+
+  .badges {
+    display: flex;
+    gap: var(--space-sm);
+    margin-top: var(--space-md);
+  }
+
+  .why h2,
+  .claude h2,
+  .install h2 {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    margin-bottom: var(--space-md);
+  }
+
+  .why ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .why li {
+    margin-bottom: var(--space-sm);
+    padding-left: 1.2em;
+    position: relative;
+    color: var(--text);
+  }
+
+  .why li::before {
+    content: '\2022';
+    color: var(--accent);
+    position: absolute;
+    left: 0;
+  }
+
+  .why code,
+  .claude p code,
+  .install p code {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .why .teaser {
+    margin-top: var(--space-md);
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .demo {
+    width: min(1080px, calc(100vw - 2 * var(--space-md)));
+    margin-left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+
+  .demo img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .demo figcaption {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-top: var(--space-sm);
+  }
+
+  .demo figcaption code {
+    font-family: var(--font-mono);
+  }
+
+  .claude p,
+  .install p {
+    margin-bottom: var(--space-md);
+  }
+
+  .claude p:last-child,
+  .install p:last-child {
+    margin-bottom: 0;
+  }
+
+  .claude pre,
+  .install pre {
+    background: var(--code-bg);
+    padding: var(--space-md);
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    overflow-x: auto;
+      margin-bottom: var(--space-md);
+  }
+
+  .footer {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding-top: var(--space-xl);
+  }
+
+  .footer a {
+    color: var(--accent);
+  }
+
+  .footer .separator {
+    margin: 0 var(--space-sm);
+  }
+
+  .github-corner {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 10;
+    color: var(--bg);
+    line-height: 0;
+  }
+
+  .github-corner .corner-bg {
+    fill: var(--accent);
+  }
+
+  .github-corner svg {
+    display: block;
+    transition: transform 200ms ease;
+  }
+
+  .github-corner:hover svg {
+    transform: scale(1.05);
+  }
+
+  .github-corner:hover .octo-arm {
+    animation: octocat-wave 560ms ease-in-out;
+  }
+
+  @keyframes octocat-wave {
+    0%, 100% { transform: rotate(0); }
+    20%, 60% { transform: rotate(-25deg); }
+    40%, 80% { transform: rotate(10deg); }
+  }
+
+  /* Below 672px the page-wrapper (max-width: 640px) hits viewport edges,
+     pushing the theme toggle flush right. Shrink the corner so its bottom
+     edge stays clear of the toggle's click target. */
+  @media (max-width: 672px) {
+    .github-corner svg {
+      width: 60px;
+      height: 60px;
+    }
+  }
+
+  @media (max-width: 500px) {
+    .github-corner:hover .octo-arm {
+      animation: none;
+    }
+    .github-corner .octo-arm {
+      animation: octocat-wave 560ms ease-in-out;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .github-corner svg,
+    .github-corner .octo-arm {
+      transition: none;
+      animation: none;
+    }
+  }
+</style>

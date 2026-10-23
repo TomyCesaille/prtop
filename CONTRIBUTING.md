@@ -58,6 +58,18 @@ module of that package, map the service's states onto `prtop.model`, register it
 in `make_forge` and in the allowed values of `PRTOP_FORGE`. A forge stays
 read-only.
 
+## The website
+
+The website, https://tomycesaille.github.io/prtop/, is an Astro site in `docs/`,
+deployed by `.github/workflows/website.yml` on every push to `main` that touches
+it:
+
+```bash
+cd docs
+npm install
+npm run dev
+```
+
 ## Releasing
 
 1. Set the version in `prtop/__init__.py`, and move the `Unreleased` entries of

@@ -18,7 +18,8 @@ Standard library only, Python 3.14 or later. `glab` is the one outside tool.
 | `prtop/tasks.py` | Task sources: what fills the Task column. |
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
 | `prtop/state.py` | The state file, written atomically. |
-| `prtop/demo.py` | The made-up report behind `--demo`. |
+| `prtop/demo.py` | The made-up report behind `--demo`, and the story its live view plays, one event per fetch. |
+| `docs/` | The website, an Astro site. `docs/public/prtop.gif`, shown on the site and in the README, is `prtop --demo -d 4` recorded in a 141×19 terminal. |
 
 ## Rules to hold
 

@@ -1,19 +1,40 @@
 # prtop
 
-The merge requests assigned to you, from review to production, in one terminal
-table that refreshes in place, the way `htop` shows processes.
+htop for your merge requests. Every MR assigned to you, from review to
+production, in one live terminal table, and a watch mode that wakes Claude Code
+the moment one moves. Read-only. Standard-library Python.
 
 [![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install)
 [![license](https://img.shields.io/github/license/TomyCesaille/prtop)](https://github.com/TomyCesaille/prtop/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/TomyCesaille/prtop/ci.yml?branch=main)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
 
-![prtop in a terminal: open merge requests on top, merged ones on their way to production below](docs/prtop.png)
+![prtop in a terminal: a countdown to the next fetch, then the merge requests that changed shown in reverse video](docs/public/prtop.gif)
 
-prtop reads GitLab through the [`glab`](https://gitlab.com/gitlab-org/cli) CLI
-and never writes to it: it does not merge, rebase, or trigger a job. Each merge
-request assigned to you gets one row, marked with whose move it is. Once one
-merges, prtop follows its pipeline to production and drops the row when
-production runs it.
+[Website](https://tomycesaille.github.io/prtop/) | [Claude Code setup](examples/claude-code)
+
+## Why
+
+A merge request moves in many places at once: review threads, approvals, a rebase
+GitLab asks for, a pipeline, a manual production job someone has to trigger.
+Following them by hand takes a browser tab per MR, and an agent polling them in a
+loop spends tokens on every quiet check.
+
+**prtop puts them in one table:**
+
+- **Whose move it is, at a glance.** Each row carries a mark, `!` on you, `?` to
+  look at, `~` on someone else, `.` on a machine, and its state in words. No
+  colour needed.
+- **All the way to production.** A merged MR stays in the table through its
+  pipeline, its manual production trigger and its deploy, and leaves once
+  production runs it.
+- **Made for Claude Code.** `prtop watch` checks in the background and exits with
+  the new table the moment something moves, so Claude wakes exactly when your MR
+  needs it, and spends nothing while it waits.
+- **Read-only.** prtop reads GitLab through the
+  [`glab`](https://gitlab.com/gitlab-org/cli) CLI and never merges, rebases or
+  triggers a job. Your agent does, after asking you.
+- **Nothing to install but `glab`.** Standard-library Python 3.14, on macOS,
+  Linux and Windows.
 
 ## Install
 
