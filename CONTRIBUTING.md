@@ -8,7 +8,7 @@ layout and the rules the code holds to; read it before a change of any size.
 prtop needs Python 3.14 or later and nothing else to run its tests.
 
 ```bash
-git clone https://github.com/<owner>/prtop
+git clone https://github.com/TomyCesaille/prtop
 cd prtop
 uv tool install --editable .   # `prtop` now runs this checkout
 ```

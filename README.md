@@ -1,5 +1,7 @@
 # prtop
 
+[![CI](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml/badge.svg)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
+
 The merge requests assigned to you, from review to production, in one terminal
 table that refreshes in place, the way `htop` shows processes.
 
@@ -22,9 +24,9 @@ glab auth login --hostname gitlab.example.com
 
 | Where | How |
 |---|---|
-| macOS, Linux | `brew install <owner>/tap/prtop` |
+| macOS, Linux | `brew install TomyCesaille/tap/prtop` |
 | Windows | `choco install prtop` |
-| Anywhere with Python 3.14 or later | `uv tool install git+https://github.com/<owner>/prtop` |
+| Anywhere with Python 3.14 or later | `uv tool install git+https://github.com/TomyCesaille/prtop` |
 
 Homebrew and Chocolatey install `glab` alongside prtop. On Windows, run prtop in
 Windows Terminal, the default terminal on Windows 11: the older console shows the

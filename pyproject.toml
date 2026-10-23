@@ -25,6 +25,11 @@ classifiers = [
     "Topic :: Software Development :: Version Control :: Git",
 ]
 
+[project.urls]
+Homepage = "https://github.com/TomyCesaille/prtop"
+Issues = "https://github.com/TomyCesaille/prtop/issues"
+Changelog = "https://github.com/TomyCesaille/prtop/blob/main/CHANGELOG.md"
+
 [project.scripts]
 prtop = "prtop.cli:main"
 
