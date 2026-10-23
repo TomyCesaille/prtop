@@ -2,16 +2,22 @@
 
 import io
 import json
+import runpy
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from prtop import model
-from prtop.cli import batch, parse_args, run_check, tab_color_hook, watch
-from prtop.config import Config
+from prtop.cli import batch, main, parse_args, run_check, show_live, tab_color_hook, watch
+from prtop.config import Config, ConfigError
+from prtop.forges import make_forges
+from prtop.forges.github import GitHub
+from prtop.forges.gitlab import GitLab
+from prtop.live import View
 from prtop.model import DeployState, ForgeError
-from prtop.report import NOTHING_OPEN, Report
+from prtop.report import NOTHING_OPEN, Report, plain
 from prtop.tasks import NoTasks, Task
 
 HOST = "gitlab.example.com"
@@ -32,9 +38,8 @@ def entry(iid, status=model.AWAITING_REVIEW, *, approved=False, title=None):
 
 
 class FakeForge:
-    host = HOST
-
-    def __init__(self):
+    def __init__(self, host=HOST):
+        self.host = host
         self.open: dict = {}
         self.error: str | None = None
         self.merged: set[int] = set()
@@ -63,12 +68,13 @@ class Check(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.state_file = Path(tmp.name) / "state.json"
-        self.config = Config(state_file=self.state_file)
+        self.state_dir = Path(tmp.name)
+        self.state_file = self.state_dir / f"{HOST}.json"
+        self.config = Config(state_dir=self.state_dir)
         self.forge = FakeForge()
 
     def check(self, config=None, tasks=None):
-        return run_check(config or self.config, self.forge, tasks or NoTasks())
+        return run_check(config or self.config, [self.forge], tasks or NoTasks())
 
     def saved(self):
         return json.loads(self.state_file.read_text())
@@ -144,7 +150,7 @@ class Check(unittest.TestCase):
         self.assertEqual(self.saved()["open_mrs"], {})
 
     def test_without_deploy_tracking_merges_are_not_followed(self):
-        config = Config(state_file=self.state_file, deploy_tracking=False)
+        config = Config(state_dir=self.state_dir, deploy_tracking=False)
         self.forge.open = {"frontend!1": entry(1)}
         self.check(config)
         self.forge.open, self.forge.merged = {}, {1}
@@ -181,11 +187,72 @@ class Check(unittest.TestCase):
         self.assertFalse(report.action_needed)
 
 
+class SeveralForges(unittest.TestCase):
+    """One GitLab instance and github.com, read together into one table."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state_dir = Path(tmp.name)
+        self.config = Config(state_dir=self.state_dir, forges=("gitlab", "github"))
+        self.gitlab, self.github = FakeForge(HOST), FakeForge("github.com")
+
+    def check(self):
+        return run_check(self.config, [self.gitlab, self.github], NoTasks())
+
+    def test_their_rows_sort_together_by_mark(self):
+        self.gitlab.open = {"web!1": entry(1, title="feat: on gitlab")}
+        self.github.open = {"cli!2": entry(2, model.MERGEABLE, approved=True, title="feat: on github")}
+        lines = plain(self.check().text).splitlines()
+        self.assertIn("feat: on github", lines[2])
+        self.assertIn("feat: on gitlab", lines[4])
+
+    def test_a_pull_request_reads_exactly_like_a_merge_request(self):
+        self.gitlab.open = {"web!1": entry(1, title="feat: same")}
+        on_gitlab = plain(self.check().text)
+        on_github = dict(entry(1, title="feat: same"), web_url="https://github.com/acme/web/pull/1")
+        self.gitlab.open, self.github.open = {}, {"web!1": on_github}
+        self.assertEqual(plain(self.check().text), on_gitlab)
+
+    def test_each_forge_keeps_a_state_file_of_its_own(self):
+        self.gitlab.open = {"web!1": entry(1)}
+        self.github.open = {"web!1": entry(1, title="the github one")}
+        self.check()
+        saved = {path.name: json.loads(path.read_text()) for path in self.state_dir.iterdir()}
+        self.assertEqual(set(saved), {f"{HOST}.json", "github.com.json"})
+        self.assertEqual(saved["github.com.json"]["open_mrs"]["web!1"]["title"], "the github one")
+
+    def test_a_forge_that_does_not_answer_leaves_the_others_rows_in_place(self):
+        self.gitlab.open = {"web!1": entry(1, title="feat: still here")}
+        self.github.error = "connection refused"
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            report = self.check()
+        self.assertIn("feat: still here", report.text)
+        self.assertIn("github.com", report.text)
+        self.assertIn("instance unreachable", report.text)
+        self.assertTrue(report.action_needed)
+        self.assertIn("prtop: github.com: connection refused", stderr.getvalue())
+
+    def test_a_merge_is_asked_of_the_forge_it_happened_on(self):
+        self.github.open = {"cli!2": entry(2, title="feat: merged on github")}
+        self.check()
+        self.github.open, self.github.merged = {}, {2}
+        report = self.check()
+        self.assertEqual((self.gitlab.asked_about_merges, self.github.asked_about_merges), ([], [2]))
+        self.assertIn("feat: merged on github", report.text)
+
+    def test_every_forge_is_made_in_the_order_the_setting_names_them(self):
+        forges = make_forges(Config(state_dir=self.state_dir, forges=("github", "gitlab")))
+        self.assertEqual([type(f) for f in forges], [GitHub, GitLab])
+        self.assertEqual([f.host for f in forges], ["github.com", "gitlab.com"])
+
+
 class Watch(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.config = Config(state_file=Path(tmp.name) / "state.json")
+        self.config = Config(state_dir=Path(tmp.name))
         self.forge = FakeForge()
         self.now = 0.0
         self.checks = 0
@@ -200,7 +267,7 @@ class Watch(unittest.TestCase):
         self.change_after = change_after
         out = io.StringIO()
         with redirect_stdout(out):
-            code = watch(self.config, self.forge, NoTasks(), 300, cap, sleep=self.sleep, clock=lambda: self.now)
+            code = watch(self.config, [self.forge], NoTasks(), 300, cap, sleep=self.sleep, clock=lambda: self.now)
         return code, out.getvalue()
 
     def test_it_exits_with_the_report_as_soon_as_something_changes(self):
@@ -275,18 +342,107 @@ class Arguments(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parse_args(["-d", "0"])
 
+    def test_the_demo_has_nothing_to_watch(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["--demo", "watch"])
+
+
+class Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class Main(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = Config(state_dir=Path(tmp.name), forges=("gitlab", "github"), gitlab_host=HOST)
+        self.forges = [FakeForge(HOST), FakeForge("github.com")]
+        self.forges[0].open = {"web!1": entry(1, title="feat: on gitlab")}
+        self.forges[1].open = {"cli!2": entry(2, title="feat: on github")}
+        for target, value in (("load_config", self.config), ("make_forges", self.forges)):
+            patcher = mock.patch(f"prtop.cli.{target}", return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_setting_prtop_cannot_read_ends_it_before_any_fetch(self):
+        stderr = io.StringIO()
+        refused = ConfigError("PRTOP_FORGES='svn': expected …")
+        with mock.patch("prtop.cli.load_config", side_effect=refused), redirect_stderr(stderr):
+            self.assertEqual(main([]), 2)
+        self.assertIn("prtop: PRTOP_FORGES='svn'", stderr.getvalue())
+
+    def test_output_that_is_not_a_terminal_gets_one_table_of_every_forge(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main([]), 0)
+        self.assertIn("feat: on gitlab", out.getvalue())
+        self.assertIn("feat: on github", out.getvalue())
+
+    def test_watch_checks_every_forge(self):
+        with mock.patch("prtop.cli.watch", return_value=0) as watching:
+            self.assertEqual(main(["watch"]), 0)
+        config, forges, _, delay, cap = watching.call_args.args
+        self.assertEqual((config, forges, delay, cap), (self.config, self.forges, 300, 7200))
+
+    def test_in_a_terminal_the_live_view_names_every_forge_it_reads(self):
+        with mock.patch("prtop.cli.show_live", return_value=0) as live_view, \
+                mock.patch("sys.stdin", Terminal()), redirect_stdout(Terminal()):
+            self.assertEqual(main(["-d", "10"]), 0)
+        fetch, title, delay, max_iterations, on_report = live_view.call_args.args
+        self.assertEqual((title, delay, max_iterations, on_report), (f"{HOST} + github.com", 10, None, None))
+        self.assertIn("feat: on github", fetch().text)
+
+
+class ModuleEntry(unittest.TestCase):
+    def test_python_m_prtop_runs_the_command_and_exits_with_its_status(self):
+        with mock.patch("prtop.cli.main", return_value=3), self.assertRaises(SystemExit) as caught:
+            runpy.run_module("prtop", run_name="__main__")
+        self.assertEqual(caught.exception.code, 3)
+
+
+class LiveScreen(unittest.TestCase):
+    def show(self, outcome, busy=False):
+        exits = []
+        run = mock.patch("prtop.cli.live.run", side_effect=[outcome])
+        screen = mock.patch("prtop.cli.fullscreen", return_value=nullcontext())
+        fetcher = mock.patch("prtop.cli.live.Fetcher")
+        out, err = io.StringIO(), io.StringIO()
+        with run, screen, fetcher as making, mock.patch("prtop.cli.os._exit", exits.append):
+            making.return_value.busy = busy
+            with redirect_stdout(out), redirect_stderr(err):
+                code = show_live(lambda: None, HOST, 30, None, None)
+        return code, out.getvalue(), err.getvalue(), exits
+
+    def test_after_n_fetches_the_last_table_and_its_messages_stay_behind(self):
+        view = View(HOST, report=Report([], False, False), messages=["prtop: web!1: 502"], finished=True)
+        self.assertEqual(self.show(view)[:3], (0, NOTHING_OPEN + "\n", "prtop: web!1: 502\n"))
+
+    def test_after_n_fetches_that_all_failed_only_the_errors_stay_behind(self):
+        view = View(HOST, messages=["prtop: connection refused"], finished=True)
+        self.assertEqual(self.show(view)[:3], (0, "", "prtop: connection refused\n"))
+
+    def test_quitting_leaves_the_terminal_as_it_was(self):
+        self.assertEqual(self.show(View(HOST, report=Report([], False, False)))[:3], (0, "", ""))
+
+    def test_ctrl_c_quits_quietly(self):
+        self.assertEqual(self.show(KeyboardInterrupt())[:3], (0, "", ""))
+
+    def test_a_fetch_still_in_flight_does_not_hold_the_exit(self):
+        self.assertEqual(self.show(View(HOST), busy=True)[3], [0])
+
 
 class TabColor(unittest.TestCase):
     def printed(self, action_needed):
         out = io.StringIO()
         with redirect_stdout(out):
-            tab_color_hook(Config(state_file=Path("unused"), iterm_tab_color=True))(
+            tab_color_hook(Config(state_dir=Path("unused"), iterm_tab_color=True))(
                 Report([], False, action_needed)
             )
         return out.getvalue()
 
     def test_the_tab_keeps_its_color_unless_asked(self):
-        self.assertIsNone(tab_color_hook(Config(state_file=Path("unused"))))
+        self.assertIsNone(tab_color_hook(Config(state_dir=Path("unused"))))
 
     def test_the_iterm_tab_turns_orange_while_an_mr_is_on_you(self):
         self.assertIn("\033]6;1;bg;red;brightness;255\a", self.printed(True))

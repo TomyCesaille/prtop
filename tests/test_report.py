@@ -6,7 +6,7 @@ from pathlib import Path
 
 from prtop import model
 from prtop.config import Config
-from prtop.forges.gitlab import PIPELINE_INFLIGHT, PROD_DEPLOYING, ProdJobs, classify_pending
+from prtop.forges.pipelines import PIPELINE_INFLIGHT, PROD_DEPLOYING, ProdJobs, classify_pending
 from prtop.model import DeployState
 from prtop.report import (
     ACT,
@@ -39,7 +39,7 @@ from prtop.report import (
 HOST = "gitlab.example.com"
 WIDEST_STATUS = "🔍 merge check running, unapproved"
 
-_defaults = Config(state_file=Path("unused"))
+_defaults = Config(state_dir=Path("unused"))
 PROD_JOBS = ProdJobs(_defaults.deploy_job_pattern, _defaults.primary_deploy_job_pattern)
 PIPELINE_STATES = PIPELINE_INFLIGHT | {"failed", "success", "canceled", "skipped", "manual"}
 JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manual", "created"}

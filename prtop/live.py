@@ -168,8 +168,9 @@ def fit(report: Report, columns: int) -> list[str]:
 
 
 def _signatures(report: Report) -> dict[str, tuple[str, ...]]:
+    # Keyed by the PR cell with its link: two forges can each have a `web!12`.
     return {
-        plain(row.pr): (row.mark, row.title, row.task, plain(row.status))
+        row.pr: (row.mark, row.title, row.task, plain(row.status))
         for row in report.rows
         if row is not None
     }
@@ -233,7 +234,7 @@ class View:
         # Two lines of header, then one line per row, a rule standing for `None`.
         rows = [None, None, *self.report.rows]
         return [
-            f"{REVERSE}{line}{NOT_REVERSE}" if row is not None and plain(row.pr) in self.changed else line
+            f"{REVERSE}{line}{NOT_REVERSE}" if row is not None and row.pr in self.changed else line
             for row, line in zip(rows, fit(self.report, columns))
         ]
 
