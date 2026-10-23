@@ -81,7 +81,9 @@ Adding a state means choosing its mark first and its glyph last. The
 - **Homebrew:** the formula lives in
   [TomyCesaille/homebrew-tap](https://github.com/TomyCesaille/homebrew-tap) and
   installs the tagged source archive into a virtualenv, with `glab` and Python
-  3.14 as dependencies.
+  3.14 as dependencies. `.github/workflows/homebrew.yml` opens the formula update
+  there for a new tag, and once the tap serves the version, installs it from the
+  tap and checks it, through the `homebrew` environment.
 - **Chocolatey:** `packaging/chocolatey/build.py` assembles the package around the
   Windows embeddable Python, with `prtop/` beside `python.exe`; one shim, `prtop`,
   runs `python -m prtop`, and `.ignore` files keep the bundled Python off PATH.

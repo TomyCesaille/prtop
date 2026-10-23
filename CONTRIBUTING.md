@@ -79,10 +79,13 @@ npm run dev
 3. The tag runs the Chocolatey workflow: it builds the package around its own
    Python, installs and runs it on Windows, and pushes it to
    community.chocolatey.org.
-4. In [TomyCesaille/homebrew-tap](https://github.com/TomyCesaille/homebrew-tap),
-   point the formula at the new tag's archive and its SHA256 in a pull request;
-   the tap's CI builds it on macOS and Linux, and its `brew pr-pull` workflow
-   merges it with the bottles.
+4. The tag also runs the Homebrew workflow, which opens the formula update in
+   [TomyCesaille/homebrew-tap](https://github.com/TomyCesaille/homebrew-tap);
+   it needs the `HOMEBREW_TAP_TOKEN` secret of the `homebrew` environment, a
+   token that can open pull requests there. The tap's CI builds the update on
+   macOS and Linux, and its `brew pr-pull` workflow merges it with the bottles.
+   Run the Homebrew workflow once more after that: it installs the new version
+   from the tap and checks it.
 
 The Python inside the Chocolatey package is pinned, version and SHA256, in
 `packaging/chocolatey/build.py`. A security release of Python means raising it
