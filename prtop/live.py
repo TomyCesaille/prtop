@@ -59,7 +59,7 @@ Marks
   ~   on someone else, until a person moves
   .   on a machine, it resolves by itself
 
-A row in reverse video changed at the latest fetch that changed anything.""".splitlines()
+Highlighted rows changed at the latest fetch that changed anything.""".splitlines()
 
 
 class Terminal(Protocol):

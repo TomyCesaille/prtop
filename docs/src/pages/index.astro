@@ -45,7 +45,7 @@ choco install prtop                    # Windows`;
 
   <section class="hero section">
     <h1>htop for your merge requests.</h1>
-    <p class="subtitle">Every MR assigned to you, from review to production, in one live terminal table. Leave it open in a tab, or let Claude Code watch it for you.</p>
+    <p class="subtitle">Your GitLab MRs, from review to production, live in your terminal. Built to wake Claude Code.</p>
     <div class="badges">
       <img src="https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff" height="20" alt="Python 3.14 or later" />
       <a href="https://github.com/TomyCesaille/prtop/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" aria-label="prtop's MIT license">
@@ -62,33 +62,22 @@ choco install prtop                    # Windows`;
       src={`${base}/prtop.gif`}
       width="1732"
       height="621"
-      alt="prtop in a terminal: a countdown to the next fetch, then the merge requests that changed shown in reverse video"
+      alt="prtop in a terminal: a countdown to the next fetch, then the merge requests that changed, highlighted"
     />
-    <figcaption><code>prtop --demo</code>, fetching every 4 seconds. A row that changed shows in reverse video.</figcaption>
+    <figcaption>Try it: <code>prtop --demo</code></figcaption>
   </figure>
-
-  <section class="why section">
-    <h2>Why prtop?</h2>
-    <ul>
-      <li>Whose move it is, at a glance: <code>!</code> on you, <code>?</code> to look at, <code>~</code> on someone else, <code>.</code> on a machine. No colour needed.</li>
-      <li>Follows every merge to production: pipeline, manual production trigger, deploy. The row leaves once production runs it.</li>
-      <li><code>prtop watch</code> sleeps until a row changes, then exits with the new table. Claude Code wakes exactly when your MR needs it, and spends nothing while it doesn't.</li>
-      <li>Read-only. prtop never merges, rebases or triggers a job: your agent does, after asking you.</li>
-      <li>Standard-library Python and <code>glab</code>. macOS, Linux and Windows.</li>
-    </ul>
-  </section>
 
   <section class="claude section">
     <h2>Made for Claude Code</h2>
-    <p>Once your MR is open, Claude starts <code>prtop watch</code> in the background and goes back to work. When a reviewer approves, GitLab asks for a rebase, or production waits on its trigger, the watch exits and Claude tells you what moved, and what it can do next.</p>
+    <p>Claude runs <code>prtop watch</code> in the background, and hears from it only when an MR moves.</p>
     <pre><code>{session}</code></pre>
-    <p>The <a href="https://github.com/TomyCesaille/prtop/tree/main/examples/claude-code">Claude Code setup</a> gives Claude a <code>/prs</code> command and the instructions to keep watching.</p>
+    <p>Setup: <a href="https://github.com/TomyCesaille/prtop/tree/main/examples/claude-code">examples/claude-code</a></p>
   </section>
 
   <section class="install section">
     <h2>Install</h2>
     <pre><code>{install}</code></pre>
-    <p>Then sign <code>glab</code> in to your GitLab and run <code>prtop</code>.</p>
+    <p>Then <code>glab auth login</code>, and <code>prtop</code>.</p>
   </section>
 
   <footer class="footer">
@@ -139,7 +128,6 @@ choco install prtop                    # Windows`;
     margin-top: var(--space-md);
   }
 
-  .why h2,
   .claude h2,
   .install h2 {
     font-size: 20px;
@@ -148,26 +136,9 @@ choco install prtop                    # Windows`;
     margin-bottom: var(--space-md);
   }
 
-  .why ul {
-    list-style: none;
-    padding: 0;
-  }
 
-  .why li {
-    margin-bottom: var(--space-sm);
-    padding-left: 1.2em;
-    position: relative;
-    color: var(--text);
-  }
 
-  .why li::before {
-    content: '\2022';
-    color: var(--accent);
-    position: absolute;
-    left: 0;
-  }
 
-  .why code,
   .claude p code,
   .install p code {
     font-family: var(--font-mono);
@@ -177,11 +148,6 @@ choco install prtop                    # Windows`;
     border-radius: 3px;
   }
 
-  .why .teaser {
-    margin-top: var(--space-md);
-    color: var(--text-muted);
-    font-size: 14px;
-  }
 
   .demo {
     width: min(1080px, calc(100vw - 2 * var(--space-md)));
