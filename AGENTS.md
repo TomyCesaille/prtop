@@ -75,6 +75,18 @@ Adding a state means choosing its mark first and its glyph last. The
 - Links are OSC 8 hyperlinks ended by BEL, which `plain` strips for comparisons
   and widths.
 
+## Packaging
+
+- **Homebrew:** the formula lives in
+  [TomyCesaille/homebrew-tap](https://github.com/TomyCesaille/homebrew-tap) and
+  installs the tagged source archive into a virtualenv, with `glab` and Python
+  3.14 as dependencies.
+- **Chocolatey:** `packaging/chocolatey/build.py` assembles the package around the
+  Windows embeddable Python, with `prtop/` beside `python.exe`; one shim, `prtop`,
+  runs `python -m prtop`, and `.ignore` files keep the bundled Python off PATH.
+  `.github/workflows/chocolatey.yml` builds, installs, runs and uninstalls it on
+  every change, and publishes it from a tag through the `chocolatey` environment.
+
 ## GitLab
 
 - `--hostname` goes on every `glab api` call; without it `glab` picks the host

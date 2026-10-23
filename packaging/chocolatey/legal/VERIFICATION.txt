@@ -1,0 +1,22 @@
+VERIFICATION
+Verification is intended to assist the Chocolatey moderators and community
+in verifying that this package's contents are trustworthy.
+
+The package is built by .github/workflows/chocolatey.yml in
+https://github.com/TomyCesaille/prtop, from the v{version} tag.
+
+tools\python holds the Windows embeddable package of Python {python_version},
+unpacked as python.org publishes it:
+
+  {python_url}
+  SHA256: {python_sha256}
+
+python.org lists the same checksum on the release page,
+https://www.python.org/downloads/release/python-{python_slug}/.
+
+tools\python\prtop is the prtop package of the v{version} release, unchanged:
+
+  https://github.com/TomyCesaille/prtop/tree/v{version}/prtop
+
+To check it, download the tag's source archive and compare its prtop folder
+with tools\python\prtop.

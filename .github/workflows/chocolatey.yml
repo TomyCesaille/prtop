@@ -1,0 +1,86 @@
+name: Chocolatey
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: [packaging/chocolatey/**, prtop/**, .github/workflows/chocolatey.yml]
+  pull_request:
+    paths: [packaging/chocolatey/**, prtop/**, .github/workflows/chocolatey.yml]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the package to community.chocolatey.org
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Assemble the package
+        run: python packaging/chocolatey/build.py
+      - name: Pack it
+        run: choco pack build/chocolatey/prtop.nuspec --outputdirectory dist
+      - name: Install it, with glab from the community repository
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $before = Get-ChildItem "$env:ChocolateyInstall\bin" -Name
+          choco install prtop --source "'dist;https://community.chocolatey.org/api/v2/'" --yes --no-progress
+          $added = Get-ChildItem "$env:ChocolateyInstall\bin" -Name | Where-Object { $_ -notin $before }
+          "Commands added: $($added -join ', ')"
+          $unexpected = $added | Where-Object { $_ -notin 'prtop.exe', 'glab.exe' }
+          if ($unexpected) { throw "Commands besides prtop and glab reached PATH: $unexpected" }
+      - name: Run the command it puts on PATH
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          prtop --version
+          prtop --demo
+      - name: Uninstall it
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          choco uninstall prtop --yes --no-progress
+          if (Get-Command prtop -ErrorAction SilentlyContinue) { throw "prtop is still on PATH" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chocolatey-package
+          path: dist/*.nupkg
+
+  publish:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    runs-on: windows-latest
+    # The API key is a secret of this environment alone.
+    environment: chocolatey
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: chocolatey-package
+          path: dist
+      - name: Push the package to community.chocolatey.org
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = (Select-String -Path prtop/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          # The package carries the released code: prtop/ as tagged, nothing since.
+          git diff --quiet "v$version" HEAD -- prtop
+          choco push "dist/prtop.$version.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY

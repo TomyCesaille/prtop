@@ -57,3 +57,21 @@ values of `PRTOP_TASK_SOURCE` in `prtop/config.py`.
 module of that package, map the service's states onto `prtop.model`, register it
 in `make_forge` and in the allowed values of `PRTOP_FORGE`. A forge stays
 read-only.
+
+## Releasing
+
+1. Set the version in `prtop/__init__.py`, and move the `Unreleased` entries of
+   CHANGELOG.md under a heading for it.
+2. Once CI passes on that commit, tag it `v<version>`, push the tag, and publish
+   a GitHub release with the changelog section as its notes.
+3. The tag runs the Chocolatey workflow: it builds the package around its own
+   Python, installs and runs it on Windows, and pushes it to
+   community.chocolatey.org.
+4. In [TomyCesaille/homebrew-tap](https://github.com/TomyCesaille/homebrew-tap),
+   point the formula at the new tag's archive and its SHA256 in a pull request;
+   the tap's CI builds it on macOS and Linux, and its `brew pr-pull` workflow
+   merges it with the bottles.
+
+The Python inside the Chocolatey package is pinned, version and SHA256, in
+`packaging/chocolatey/build.py`. A security release of Python means raising it
+there and releasing a new package.

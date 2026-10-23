@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>prtop</id>
+    <version>{version}</version>
+    <title>prtop</title>
+    <authors>Joris La Cancellera</authors>
+    <owners>TomyCesaille</owners>
+    <projectUrl>https://github.com/TomyCesaille/prtop</projectUrl>
+    <projectSourceUrl>https://github.com/TomyCesaille/prtop</projectSourceUrl>
+    <packageSourceUrl>https://github.com/TomyCesaille/prtop/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://github.com/TomyCesaille/prtop#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/TomyCesaille/prtop/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/TomyCesaille/prtop/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <releaseNotes>https://github.com/TomyCesaille/prtop/blob/v{version}/CHANGELOG.md</releaseNotes>
+    <tags>gitlab merge-requests code-review terminal cli htop</tags>
+    <summary>The merge requests assigned to you, from review to production, in one terminal table that refreshes in place, like htop.</summary>
+    <description><![CDATA[prtop shows the GitLab merge requests assigned to you in one terminal table that refreshes in place, the way htop shows processes. Each row is marked with whose move it is: `!` on you now, `?` on you to look at, `~` on someone else, `.` on a machine. Once a merge request merges, prtop follows its pipeline to production and drops the row when production runs it.
+
+prtop reads GitLab through the `glab` CLI, which this package installs, and never writes to it. Sign `glab` in to your instance, point prtop at it, and run it:
+
+```
+glab auth login --hostname gitlab.example.com
+prtop
+```
+
+Settings live in `%APPDATA%\prtop\.env`; the README lists them.
+
+Run prtop in Windows Terminal, the default terminal on Windows 11: the older console shows the emoji as boxes and cannot open links.
+
+The package carries its own Python {python_version}, from python.org, kept off the PATH: only the `prtop` command is added.
+]]></description>
+    <dependencies>
+      <dependency id="glab" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+    <file src="legal\**" target="legal" />
+  </files>
+</package>
