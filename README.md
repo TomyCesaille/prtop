@@ -25,22 +25,19 @@ watching your merge requests in the background. It asks you at each step.
 
 ## Install manually
 
-prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance
-first:
+```bash
+brew install TomyCesaille/tap/prtop    # macOS, Linux
+choco install prtop                    # Windows
+```
+
+Both install `glab` alongside prtop. Elsewhere, with Python 3.14 or later and
+`glab`: `uv tool install git+https://github.com/TomyCesaille/prtop`.
+
+prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance:
 
 ```bash
 glab auth login --hostname gitlab.example.com
 ```
-
-| Where | How |
-|---|---|
-| macOS, Linux | `brew install TomyCesaille/tap/prtop` |
-| Windows | `choco install prtop` |
-| Anywhere with Python 3.14 or later | `uv tool install git+https://github.com/TomyCesaille/prtop` |
-
-Homebrew and Chocolatey install `glab` alongside prtop. On Windows, run prtop in
-Windows Terminal, the default terminal on Windows 11: the older console shows the
-emoji as boxes and cannot open links.
 
 Then point prtop at your instance, in `~/.config/prtop/.env`
 (`%APPDATA%\prtop\.env` on Windows):
@@ -48,6 +45,9 @@ Then point prtop at your instance, in `~/.config/prtop/.env`
 ```bash
 PRTOP_GITLAB_HOST=gitlab.example.com
 ```
+
+On Windows, run prtop in Windows Terminal, the default terminal on Windows 11:
+the older console shows the emoji as boxes and cannot open links.
 
 ## Use
 
