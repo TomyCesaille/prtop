@@ -43,3 +43,11 @@ include = ["prtop*"]
 line-length = 110
 target-version = "py314"
 
+[tool.coverage.run]
+branch = true
+source = ["prtop"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
