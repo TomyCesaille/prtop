@@ -6,6 +6,8 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-23
+
 The first release.
 
 ### Added
@@ -27,3 +29,6 @@ The first release.
   Windows each expect them.
 - `--demo`, the table for made-up merge requests.
 - An iTerm2 tab colour, off unless `PRTOP_ITERM_TAB_COLOR` turns it on.
+
+[Unreleased]: https://github.com/TomyCesaille/prtop/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/TomyCesaille/prtop/releases/tag/v0.1.0
