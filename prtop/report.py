@@ -34,6 +34,9 @@ OWN_THREADS_UNRESOLVED = "own_threads_unresolved"
 # awaiting-deploy halves of the shared Status column — ⏳ spans both only because
 # a pipeline in flight is one state — and silhouettes are picked to stay
 # distinguishable when a terminal drops the color and renders monochrome outlines.
+# Each is one code point that every terminal draws two cells wide: one built on
+# a variation selector (`⚠️`) is one cell in some terminals, two in others, and
+# no width count can keep the right border straight in both.
 #
 # Labels stay short enough to leave the Task column the width it needs; keep a
 # new one inside `STATUS_WIDTH`.
@@ -60,9 +63,9 @@ DEPLOY_SIGNAL = {
     model.PIPELINE_FAILED:  (ACT, "❌ pipeline failed"),
     model.PROD_FAILED:      (ACT, "❌ prod deploy failed"),
     model.PROD_DEPLOYING:   (RUNNING, "📦 prod deploying"),
-    model.AWAITING_TRIGGER: (ACT, "🕹️ awaiting prod trigger"),
+    model.AWAITING_TRIGGER: (ACT, "🚀 awaiting prod trigger"),
     model.PROD_OTHER:       (ANSWER, "➖ prod {detail}"),
-    model.CHECK_FAILED:     (ANSWER, "⚠️ check failed: {detail}"),
+    model.CHECK_FAILED:     (ANSWER, "🔌 check failed: {detail}"),
 }
 
 
@@ -198,7 +201,7 @@ def unreachable_row(host: str) -> Row:
     the mark feeds the tab color, where green would claim "all clear" — a claim
     the run cannot make about MRs it never saw.
     """
-    return Row(ACT, host, "—", "—", "⚠️ instance unreachable")
+    return Row(ACT, host, "—", "—", "🔌 instance unreachable")
 
 
 def _sort_key(row: Row) -> tuple[int, str, str, int]:

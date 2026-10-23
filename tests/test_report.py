@@ -1,5 +1,6 @@
 """Severity marks, status cells and table rendering — the accessibility contract."""
 
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -145,7 +146,7 @@ class DeploySignals(unittest.TestCase):
 
     def test_the_awaiting_trigger_cell_links_to_where_the_job_is_triggered(self):
         cell = deploy_signal(DeployState(model.AWAITING_TRIGGER, url="https://x.example/c"))[1]
-        self.assertEqual(cell, hyperlink("🕹️ awaiting prod trigger", "https://x.example/c"))
+        self.assertEqual(cell, hyperlink("🚀 awaiting prod trigger", "https://x.example/c"))
 
     def test_a_failed_production_deploy_is_on_you(self):
         self.assertEqual(deploy_signal(DeployState(model.PROD_FAILED))[0], ACT)
@@ -213,9 +214,9 @@ class AccessibilityContract(unittest.TestCase):
         for status, (_, glyph, _label) in REVIEW_SIGNAL.items():
             by_glyph.setdefault(glyph, set()).add(status)
         for kind, (_, template) in DEPLOY_SIGNAL.items():
-            glyph = template.split(" ", 1)[0].rstrip("️")
+            glyph = template.split(" ", 1)[0]
             by_glyph.setdefault(glyph, set()).add(f"deploy:{kind}")
-        by_glyph.setdefault("⚠", set()).add("unreachable_instance")
+        by_glyph.setdefault("🔌", set()).add("unreachable_instance")
 
         shared = {g: s for g, s in by_glyph.items() if len(s) > 1}
         expected = {
@@ -224,12 +225,23 @@ class AccessibilityContract(unittest.TestCase):
             "🔍": {model.MERGE_CHECK_RUNNING, model.MERGE_CHECK_PENDING},
             # One meaning, two scopes: the monitor got no answer. `check failed`
             # is a single deployment's call, this is a whole instance.
-            "⚠": {"unreachable_instance", "deploy:check_failed"},
+            "🔌": {"unreachable_instance", "deploy:check_failed"},
             # One meaning, two scopes: a run failed, the whole pipeline or its prod job.
             "❌": {"deploy:pipeline_failed", "deploy:prod_failed"},
         }
         for glyph, states in shared.items():
             self.assertEqual(states, expected.get(glyph, set()), f"{glyph} means too many things")
+
+    def test_every_glyph_keeps_the_right_border_straight_in_any_terminal(self):
+        glyphs = [
+            *(glyph for _, glyph, _ in REVIEW_SIGNAL.values()),
+            *(template.split(" ", 1)[0] for _, template in DEPLOY_SIGNAL.values()),
+            unreachable_row(HOST).status.split(" ", 1)[0],
+            status_signal(model.MERGEABLE, True)[1],
+            status_signal("a_status_the_forge_adds_later", False)[1],
+        ]
+        for glyph in glyphs:
+            self.assertEqual([unicodedata.east_asian_width(c) for c in glyph], ["W"], glyph)
 
     def test_a_glyph_is_never_the_only_difference_between_two_marks(self):
         marks = {status_signal(s, False)[0] for s in REVIEW_SIGNAL}
@@ -313,7 +325,7 @@ class TableRendering(unittest.TestCase):
         self.assertEqual(len(widths), 1, "table lines differ in rendered width")
 
     def test_a_hyperlinked_cell_occupies_only_its_visible_width(self):
-        label = "🕹️ awaiting prod trigger"
+        label = "🚀 awaiting prod trigger"
         plain_row = row(ACT, status=label)
         linked_row = plain_row._replace(status=hyperlink(label, "https://x.example/y"))
         self.assertEqual(
