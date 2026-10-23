@@ -11,6 +11,8 @@ const session = `> prtop watch                          # in the background
 
 ⏺ web!1931 is approved and mergeable. Merge it? 🚀`;
 
+const setup = `Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md`;
+
 const install = `brew install TomyCesaille/tap/prtop    # macOS, Linux
 choco install prtop                    # Windows`;
 ---
@@ -81,7 +83,8 @@ choco install prtop                    # Windows`;
     <h2>Made for Claude Code</h2>
     <p>Claude runs <code>prtop watch</code> in the background, and hears from it only when an MR moves.</p>
     <pre><code>{session}</code></pre>
-    <p>Setup: <a href="https://github.com/TomyCesaille/prtop/tree/main/examples/claude-code">examples/claude-code</a></p>
+    <p>To set it up, paste this into Claude Code:</p>
+    <pre><code>{setup}</code></pre>
   </section>
 
   <section class="install section">

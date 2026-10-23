@@ -37,6 +37,17 @@ Then point prtop at your instance, in `~/.config/prtop/.env`
 PRTOP_GITLAB_HOST=gitlab.example.com
 ```
 
+## Set up with Claude Code
+
+Paste this into Claude Code:
+
+```text
+Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md
+```
+
+It installs prtop, checks your GitLab sign-in, fits the settings to your
+projects, and adds a `/prs` command, asking you at each step.
+
 ## Use
 
 ```bash
