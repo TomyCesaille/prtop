@@ -71,8 +71,6 @@ lists every setting.
   job name, without regard to case. If their names don't match, propose
   patterns that do, and check them against the names you found. If nothing of
   theirs deploys to production, propose `PRTOP_DEPLOY_TRACKING=off`.
-- **One group.** If their merge requests sit under one group among others they
-  don't care about, propose `PRTOP_GITLAB_GROUP=<group path>`.
 - **The tab colour.** If they use iTerm2 (`TERM_PROGRAM=iTerm.app`), offer
   `PRTOP_ITERM_TAB_COLOR=on`: the live view turns the tab orange while an open
   merge request is on them.
