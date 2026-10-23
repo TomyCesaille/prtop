@@ -3,7 +3,7 @@
 htop for your merge requests. Your GitLab MRs, from review to production, live
 in your terminal. Built to wake Claude Code.
 
-[![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install)
+[![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install-manually)
 [![license](https://img.shields.io/github/license/TomyCesaille/prtop)](https://github.com/TomyCesaille/prtop/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/TomyCesaille/prtop/ci.yml?branch=main)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
 
@@ -11,7 +11,19 @@ in your terminal. Built to wake Claude Code.
 
 [Website](https://tomycesaille.github.io/prtop/) | [Claude Code setup](examples/claude-code)
 
-## Install
+## Install with Claude Code
+
+Paste this into Claude Code:
+
+```text
+Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md
+```
+
+It installs prtop, checks your GitLab sign-in and fits the settings to your
+projects. It also sets up the Claude Code integration: a `/prs` command, and
+watching your merge requests in the background. It asks you at each step.
+
+## Install manually
 
 prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance
 first:
@@ -36,17 +48,6 @@ Then point prtop at your instance, in `~/.config/prtop/.env`
 ```bash
 PRTOP_GITLAB_HOST=gitlab.example.com
 ```
-
-## Set up with Claude Code
-
-Paste this into Claude Code:
-
-```text
-Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md
-```
-
-It installs prtop, checks your GitLab sign-in, fits the settings to your
-projects, and adds a `/prs` command, asking you at each step.
 
 ## Use
 
