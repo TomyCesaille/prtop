@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from prtop.cli import main
-from prtop.demo import demo_report
+from prtop.demo import demo_report, demo_story
 from prtop.report import MARK_ORDER, plain
 
 
@@ -23,6 +23,20 @@ class Demo(unittest.TestCase):
         self.assertIn("mergeable, approved", table)
         self.assertIn("awaiting prod trigger", table)
         self.assertIn("PROJ-150 Single sign-on", table)
+
+    def test_each_fetch_of_the_live_demo_moves_something_until_the_story_ends(self):
+        fetch = demo_story(pause=lambda seconds: None)
+        tables = [plain(fetch().text) for _ in range(6)]
+        self.assertEqual(tables[0], plain(demo_report().text))
+        self.assertEqual(len(set(tables[:4])), 4)
+        self.assertEqual(tables[3:], [tables[3]] * 3)
+
+    def test_the_live_demo_takes_a_moment_to_fetch_like_a_forge(self):
+        pauses = []
+        fetch = demo_story(pause=pauses.append)
+        for _ in range(3):
+            fetch()
+        self.assertEqual(len(pauses), 2)
 
     def test_it_runs_without_any_configuration(self):
         out = io.StringIO()
