@@ -19,7 +19,7 @@ Standard library only, Python 3.14 or later. `glab` is the one outside tool.
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
 | `prtop/state.py` | The state file, written atomically. |
 | `prtop/demo.py` | The made-up report behind `--demo`, and the story its live view plays, one event per fetch. |
-| `docs/` | The website, an Astro site. `docs/public/prtop.gif`, shown on the site and in the README, is `prtop --demo -d 4` recorded in a 141×19 terminal. |
+| `docs/` | The website, an Astro site. `docs/public/prtop.gif`, shown on the site and in the README, is `prtop --demo -d 4` recorded in a 141×19 terminal. `docs/infographic/how_to_read_prtop.py` draws `docs/public/how-to-read-prtop.png` from the demo's live view. |
 
 ## Rules to hold
 
