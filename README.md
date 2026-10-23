@@ -1,9 +1,11 @@
 # prtop
 
-[![CI](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml/badge.svg)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
-
 The merge requests assigned to you, from review to production, in one terminal
 table that refreshes in place, the way `htop` shows processes.
+
+[![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install)
+[![license](https://img.shields.io/github/license/TomyCesaille/prtop)](https://github.com/TomyCesaille/prtop/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/TomyCesaille/prtop/ci.yml?branch=main)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
 
 ![prtop in a terminal: open merge requests on top, merged ones on their way to production below](docs/prtop.png)
 
