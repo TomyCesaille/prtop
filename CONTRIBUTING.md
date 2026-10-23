@@ -5,7 +5,7 @@ layout and the rules the code holds to; read it before a change of any size.
 
 ## Set up
 
-prtop needs Python 3.14 or later and nothing else to run its tests.
+prtop needs Python 3.14 or later to run its tests, and `coverage` to measure them.
 
 ```bash
 git clone https://github.com/TomyCesaille/prtop
@@ -19,23 +19,26 @@ Without uv: `python3 -m venv .venv`, then `.venv/bin/pip install --editable .`.
 
 ```bash
 python -m unittest
+python -m pip install coverage
+python -m coverage run -m unittest && python -m coverage report
 ruff check
 ```
 
-CI runs the tests on Linux, macOS and Windows with Python 3.14 and 3.15, and lints
-with ruff 0.17.2.
+CI runs the tests on Linux, macOS and Windows with Python 3.14 and 3.15, and fails
+a pull request under 100% line and branch coverage. It lints with ruff 0.17.2.
 
-To see a change on screen, `prtop --demo` needs no GitLab. Against a real instance,
-use a scratch state file, so the run does not move your own merge-detection
+To see a change on screen, `prtop --demo` needs no forge. Against a real one, use
+a scratch state directory, so the run does not move your own merge-detection
 baseline:
 
 ```bash
-PRTOP_STATE_FILE=/tmp/prtop-scratch.json prtop
+PRTOP_STATE_DIR=/tmp/prtop-scratch prtop
 ```
 
 ## Pull requests
 
-- One change per pull request, with tests for the behaviour it adds or fixes.
+- One change per pull request, with tests for the behaviour it adds or fixes;
+  coverage stays at 100%.
 - Name tests after what the user sees: `test_a_rebase_is_on_you`, not
   `test_status_signal_returns_act`.
 - Title commits and pull requests with Conventional Commits: `feat:`, `fix:`,
@@ -54,9 +57,9 @@ accessibility tests fail until all three channels agree.
 values of `PRTOP_TASK_SOURCE` in `prtop/config.py`.
 
 **A new forge.** Implement the `Forge` protocol of `prtop/forges/__init__.py` in a
-module of that package, map the service's states onto `prtop.model`, register it
-in `make_forge` and in the allowed values of `PRTOP_FORGE`. A forge stays
-read-only.
+module of that package, map the service's states onto `prtop.model` and its CI
+onto `prtop/forges/pipelines.py`, and register it in `make_forges` and in
+`prtop.config.FORGES`. A forge stays read-only.
 
 ## The website
 

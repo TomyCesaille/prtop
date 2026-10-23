@@ -5,16 +5,17 @@ this file says how the code is laid out and the rules it holds to.
 
 ## Layout
 
-Standard library only, Python 3.14 or later. `glab` is the one outside tool.
+Standard library only, Python 3.14 or later. `glab` and `gh` are the outside
+tools, one per forge.
 
 | Module | Holds |
 |---|---|
-| `prtop/cli.py` | The command: one fetch (`run_check`), the choice between the live view and one table, `watch`, the arguments. |
+| `prtop/cli.py` | The command: one fetch (`run_check`, one `check_forge` per forge), the choice between the live view and one table, `watch`, the arguments. |
 | `prtop/live.py` | The live view: the frame, the fetch loop, the keys. Pure enough to test with a fake terminal and clock. |
 | `prtop/terminal.py` | The real terminal: alternate screen, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
 | `prtop/report.py` | Marks, Status cells, row order and the table. The accessibility contract lives here. |
-| `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, `ForgeError`. |
-| `prtop/forges/` | One module per forge behind the `Forge` protocol. `gitlab.py` owns every GitLab call and field name. |
+| `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, the `repo!number` id, `ForgeError`. |
+| `prtop/forges/` | One module per forge behind the `Forge` protocol: `gitlab.py` and `github.py` each own every call and field name of their service. `command.py` runs `glab` and `gh`; `pipelines.py` holds what both map production tracking onto: job statuses, the production jobs, the frontier. |
 | `prtop/tasks.py` | Task sources: what fills the Task column. |
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
 | `prtop/state.py` | The state file, written atomically. |
@@ -23,31 +24,40 @@ Standard library only, Python 3.14 or later. `glab` is the one outside tool.
 
 ## Rules to hold
 
-- **Read-only against the forge.** `GitLab.api` issues GETs and nothing else.
+- **Read-only against the forges.** `GitLab.api` and `GitHub.api` issue GETs,
+  `GitHub.query` sends GraphQL queries, and nothing else reaches a forge.
   Merging, rebasing and triggering jobs belong to whoever reads the report.
+- **Every forge reads the same in the table.** A pull request is `repo!number`
+  like a merge request, with the same states and marks; the link on the cell says
+  where it lives. Each forge keeps its own state file, `<host>.json`, and the live
+  view tells two forges' identical ids apart by that link.
 - **Output that is not a terminal is one table and nothing else.** Agents parse it.
   The live view's status line, key bar and highlighting never reach it, and errors
   go to stderr.
 - **A forge that does not answer degrades the report, never fails it.** One
-  `! 🔌 instance unreachable` row stands in for the open merge requests, marked `!`
-  because a green tab would claim all-clear over merge requests nobody saw. The
+  `! 🔌 instance unreachable` row stands in for that forge's open merge requests,
+  beside the other forge's rows, marked `!` because a green tab would claim
+  all-clear over merge requests nobody saw. The
   previous open entries stay in the state file, not in the table: they are the
   baseline that tells the next fetch what merged, so an outage never reads as a
   wave of merges. A merge check that fails keeps its entry in that baseline and is
   asked about again on the next fetch.
 - **Production is judged against a frontier.** Per project and branch, the
   frontier is the newest pipeline whose primary production job succeeded. A
-  merged merge request whose pipeline id is at or below it is in production, even
-  when its own job never ran: a branch's history is linear, so a later deploy
-  carries the earlier commits. A pipeline that finished with no production job
-  ends the tracking too (`model.FINISHED`).
+  merged merge request at or below it is in production, even when its own job
+  never ran: a branch's history is linear, so a later deploy carries the earlier
+  commits. GitLab compares pipeline ids; GitHub asks whether the deployed commit
+  contains the merge commit, since a workflow run can start after a later
+  commit's runs. A pipeline that finished with no production job ends the
+  tracking too (`model.FINISHED`).
 - **`action_needed` counts open merge requests only.** Deploy rows carry `!` marks
   of their own but never turn the tab orange.
 - **Your own unresolved threads are hints, not feedback.** A thread only you wrote
   in reads as `awaiting review`, or as `resolve own threads` once the merge request
   is approved. One note from anyone else makes it `unresolved threads`.
 - **Conflicts outrank the review state.** GitLab reports `has_conflicts` apart from
-  `detailed_merge_status`, which can still say `not_approved`.
+  `detailed_merge_status`, which can still say `not_approved`; GitHub reports
+  `mergeable: CONFLICTING` apart from a draft.
 
 ### The accessibility contract
 
@@ -103,9 +113,38 @@ Adding a state means choosing its mark first and its glyph last. The
 - Right after a merge, the branch pipeline may not exist yet: the merge commit's
   pipeline is looked for a few times before the latest one stands in.
 
+## GitHub
+
+- github.com only. `--hostname github.com` goes on every `gh` call, so neither
+  `GH_HOST` nor the working directory's remote picks another host.
+- The listing is two steps. One search query returns the ids of the open pull
+  requests you opened and of those assigned to you; their state is then read in
+  batches of 20 through `nodes(ids:)`, in parallel. GitHub works out each one's
+  `mergeStateStatus` as it answers, and a query that runs past ten seconds fails
+  whole with an HTTP 502, which a single query over 40-odd pull requests does.
+- Review threads come with `isResolved` only. Who wrote in them is asked for one
+  pull request at a time, and only when GitHub reports `BLOCKED` and a thread is
+  unresolved: the listing stays at a few rate-limit points a fetch.
+- `mergeStateStatus` is the same whoever asks. `viewerPermission` decides whether
+  a mergeable pull request is yours to merge or its maintainers'; an empty
+  `reviewDecision` (no review required) counts as approved only for who can merge.
+- `gh api graphql` exits 1 whenever the response carries errors, data included.
+  `GitHub.query` keeps the data and reports the errors on stderr: an organization
+  whose single sign-on the token lacks hides its pull requests without hiding the
+  others.
+- A merged pull request is followed through the GitHub Actions runs of its merge
+  commit on the base branch, read as one pipeline. Run and job states are
+  translated into `pipelines.py`'s words; `waiting`, a job held by a protected
+  environment's reviewers, is a manual job, and the run's page is where it is
+  approved. A finished run's jobs and a commit comparison never change, so the
+  forge keeps them for the life of the process.
+
 ## State file
 
-Keyed by the `repo!iid` the PR column shows.
+One per forge, `<host>.json`, keyed by the `repo!number` the PR column shows.
+GitLab's entries are below; GitHub's carry `repo` (`owner/name`) and `number`
+where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
+`sha` and `prod_run_id`.
 
 ```jsonc
 {
@@ -127,21 +166,24 @@ Keyed by the `repo!iid` the PR column shows.
 
 ```bash
 python -m unittest
+python -m coverage run -m unittest && python -m coverage report
 ruff check
 ```
 
-The tests need neither network nor `glab`: forges answer from memory, and the live
-view runs against a fake terminal and clock. Two tests run `prtop --demo` in a
-pseudo-terminal on POSIX. CI (`.github/workflows/ci.yml`) runs them on Linux, macOS
-and Windows with Python 3.14 and 3.15, installs the package and runs the command it
-installs, and lints with a pinned ruff.
+The tests need neither network, `glab` nor `gh`: forges answer from memory, the
+live view runs against a fake terminal and clock, and each platform's terminal
+against stand-ins for `termios`, `msvcrt` and the Windows console, so one run
+covers both. Two tests run `prtop --demo` in a pseudo-terminal on POSIX. CI
+(`.github/workflows/ci.yml`) runs them on Linux, macOS and Windows with Python 3.14
+and 3.15, fails under 100% line and branch coverage on any of them, installs the
+package and runs the command it installs, and lints with a pinned ruff.
 
 Never point a development run at your real state file: a run moves the
 merge-detection baseline, so a merge that happened since the last real run would
 be consumed by the test. Use a scratch copy:
 
 ```bash
-PRTOP_STATE_FILE=/tmp/prtop-scratch.json prtop
+PRTOP_STATE_DIR=/tmp/prtop-scratch prtop
 ```
 
 ## Conventions
