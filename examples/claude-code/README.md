@@ -12,4 +12,6 @@ prtop installed and pointed at your instance:
 
 To use them, copy `commands/prs.md` into `~/.claude/commands/` (or a project's
 `.claude/commands/`), and paste the section of `CLAUDE.md` into your own
-`~/.claude/CLAUDE.md`.
+`~/.claude/CLAUDE.md`. Or let Claude do it all, prtop's installation included:
+[`SETUP.md`](SETUP.md) walks it through, and the README gives the one line to
+paste.

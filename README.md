@@ -3,7 +3,7 @@
 htop for your merge requests. Your GitLab MRs, from review to production, live
 in your terminal. Built to wake Claude Code.
 
-[![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install)
+[![Python](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff)](#install-manually)
 [![license](https://img.shields.io/github/license/TomyCesaille/prtop)](https://github.com/TomyCesaille/prtop/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/TomyCesaille/prtop/ci.yml?branch=main)](https://github.com/TomyCesaille/prtop/actions/workflows/ci.yml)
 
@@ -11,24 +11,33 @@ in your terminal. Built to wake Claude Code.
 
 [Website](https://tomycesaille.github.io/prtop/) | [Claude Code setup](examples/claude-code)
 
-## Install
+## Install with Claude Code
 
-prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance
-first:
+Paste this into Claude Code:
+
+```text
+Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md
+```
+
+It installs prtop, checks your GitLab sign-in and fits the settings to your
+projects. It also sets up the Claude Code integration: a `/prs` command, and
+watching your merge requests in the background. It asks you at each step.
+
+## Install manually
+
+```bash
+brew install TomyCesaille/tap/prtop    # macOS, Linux
+choco install prtop                    # Windows
+```
+
+Both install `glab` alongside prtop. Elsewhere, with Python 3.14 or later and
+`glab`: `uv tool install git+https://github.com/TomyCesaille/prtop`.
+
+prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance:
 
 ```bash
 glab auth login --hostname gitlab.example.com
 ```
-
-| Where | How |
-|---|---|
-| macOS, Linux | `brew install TomyCesaille/tap/prtop` |
-| Windows | `choco install prtop` |
-| Anywhere with Python 3.14 or later | `uv tool install git+https://github.com/TomyCesaille/prtop` |
-
-Homebrew and Chocolatey install `glab` alongside prtop. On Windows, run prtop in
-Windows Terminal, the default terminal on Windows 11: the older console shows the
-emoji as boxes and cannot open links.
 
 Then point prtop at your instance, in `~/.config/prtop/.env`
 (`%APPDATA%\prtop\.env` on Windows):
@@ -36,6 +45,9 @@ Then point prtop at your instance, in `~/.config/prtop/.env`
 ```bash
 PRTOP_GITLAB_HOST=gitlab.example.com
 ```
+
+On Windows, run prtop in Windows Terminal, the default terminal on Windows 11:
+the older console shows the emoji as boxes and cannot open links.
 
 ## Use
 
@@ -66,84 +78,7 @@ table.
 
 ## Reading the table
 
-```text
-|   | PR title                                   | Task                          | PR           | Status                             |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| ! | feat: sign in with SSO from the login page | PROJ-150 Single sign-on       | `web!1931`   | ✅ mergeable, approved             |
-| ! | chore(deps): align grpcio-status with pro… | —                             | `api!2549`   | 💥 conflicts, unapproved           |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| ? | feat: rate-limit the public search endpoi… | PROJ-147 Search rate limiting | `api!2551`   | ⛔ changes requested, unapproved   |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| ~ | Draft: feat: dark mode toggle in the sett… | PROJ-142 Dark mode            | `web!1922`   | 📝 draft                           |
-| ~ | fix(deps): bump idna for a security advis… | —                             | `api!2547`   | 👀 awaiting review                 |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| . | fix: retry webhook deliveries on a 502     | PROJ-138 Webhook retries      | `worker!812` | ⏳ CI running, approved            |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| ! | fix: right-to-left text in transactional … | PROJ-131 Right-to-left emails | `api!2544`   | 🚀 awaiting prod trigger           |
-|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
-| . | feat: export the audit log as CSV          | PROJ-129 Audit log export     | `web!1918`   | 📦 prod deploying                  |
-```
-
-The first column says whose move it is:
-
-| Mark | Means | For instance |
-|---|---|---|
-| `!` | on you now | approved and mergeable, rebase needed, conflicts, your own threads left to resolve, a failed pipeline, a production job awaiting its trigger |
-| `?` | on you to look at or reply to | changes requested, a reviewer's unresolved threads, a status prtop does not know |
-| `~` | on someone else, until a person moves | awaiting review, draft, blocked by another merge request |
-| `.` | on a machine; it resolves by itself | CI running, merge check running, production deploying |
-
-Open merge requests come first, merged ones on their way to production below
-them. Within each group, rows sort by mark, then by task, repository and number,
-and a rule separates one mark from the next.
-
-A state is never told by colour or emoji alone. The mark, the row's position and
-the words in the Status column each carry it; the emoji repeats it. The marks
-also read as a weight gradient, `!` the heaviest shape and `.` the lightest, so
-the eye lands on the top of the table first.
-
-In terminals that support hyperlinks, the PR cell opens the merge request, the
-Task cell opens the task, and `awaiting prod trigger` opens the page the
-production job is triggered from.
-
-In the live view, the rows that changed are highlighted until the next fetch that
-changes something, and the top line gives the time of that change.
-
-When GitLab does not answer, one `! 🔌 instance unreachable` row stands in for the
-open merge requests rather than showing states the fetch could not confirm.
-
-## Following merges to production
-
-When a merge request leaves the open list merged, prtop finds the pipeline of its
-merge commit on the target branch and follows it:
-
-| Status | Mark |
-|---|---|
-| `⏳ pipeline running` (or pending, created…) | `.` |
-| `❌ pipeline failed` | `!` |
-| `🚀 awaiting prod trigger` | `!` |
-| `📦 prod deploying` | `.` |
-| `❌ prod deploy failed` | `!` |
-| `➖ prod <job status>` | `?` |
-| `🔌 check failed: <error>` | `?` |
-
-The row leaves the table once production runs its commit: when its own production
-job succeeded, or when a later pipeline on the same branch did, since a later
-deploy carries the earlier commits with it. A pipeline that finishes without any
-production job leaves the table too, having nothing to deploy.
-
-prtop tells production deploy jobs apart by name, with two settings:
-
-- `PRTOP_DEPLOY_JOB_PATTERN`, default `deploy.*prod|prod.*deploy`, matches every job
-  that deploys to production, and leaves out jobs such as `migrate_production` or
-  `test_production`.
-- `PRTOP_PRIMARY_DEPLOY_JOB_PATTERN`, default `^deploy[_-]production$`, picks among
-  those the job whose success means the app itself shipped, as opposed to side
-  services deployed beside it. When no job matches it, every production deploy
-  job counts.
-
-Both are regular expressions, matched without regard to case.
-`PRTOP_DEPLOY_TRACKING=off` turns the following off altogether.
+![How to read prtop. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them.](docs/public/how-to-read-prtop.png)
 
 ## Configuration
 
@@ -195,13 +130,6 @@ With `PRTOP_TASK_SOURCE=none` the column is left out and the titles take its wid
   PRTOP_TASK_BRANCH_PATTERN=(?P<id>\d+)-(?P<title>[^/]+)$
   PRTOP_TASK_URL=https://tracker.example.com/tasks/{id}
   ```
-
-### The state file
-
-The state file records the open merge requests of the last fetch, which is how the
-next fetch tells that one merged, and the merged ones still on their way to
-production. It is safe to delete: the next fetch starts a fresh baseline, and a
-merge request that merged in between is not followed to production.
 
 ## With an AI agent
 
