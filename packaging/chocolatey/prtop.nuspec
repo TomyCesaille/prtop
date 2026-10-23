@@ -14,14 +14,15 @@
     <licenseUrl>https://github.com/TomyCesaille/prtop/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <releaseNotes>https://github.com/TomyCesaille/prtop/blob/v{version}/CHANGELOG.md</releaseNotes>
-    <tags>gitlab merge-requests code-review terminal cli htop</tags>
-    <summary>The merge requests assigned to you, from review to production, in one terminal table that refreshes in place, like htop.</summary>
-    <description><![CDATA[prtop shows the GitLab merge requests assigned to you in one terminal table that refreshes in place, the way htop shows processes. Each row is marked with whose move it is: `!` on you now, `?` on you to look at, `~` on someone else, `.` on a machine. Once a merge request merges, prtop follows its pipeline to production and drops the row when production runs it.
+    <tags>gitlab github merge-requests pull-requests code-review terminal cli htop</tags>
+    <summary>Your merge requests and pull requests, from review to production, in one terminal table that refreshes in place, like htop.</summary>
+    <description><![CDATA[prtop shows your GitLab merge requests and GitHub pull requests in one terminal table that refreshes in place, the way htop shows processes. Each row is marked with whose move it is: `!` on you now, `?` on you to look at, `~` on someone else, `.` on a machine. Once a merge request merges, prtop follows its pipeline to production and drops the row when production runs it.
 
-prtop reads GitLab through the `glab` CLI, which this package installs, and never writes to it. Sign `glab` in to your instance, point prtop at it, and run it:
+prtop reads GitLab through the `glab` CLI and GitHub through the `gh` CLI, which this package installs, and never writes to either. Sign in to the ones you use, tell prtop what to read, and run it:
 
 ```
 glab auth login --hostname gitlab.example.com
+gh auth login
 prtop
 ```
 
@@ -33,6 +34,7 @@ The package carries its own Python {python_version}, from python.org, kept off t
 ]]></description>
     <dependencies>
       <dependency id="glab" />
+      <dependency id="gh" />
     </dependencies>
   </metadata>
   <files>
