@@ -4,7 +4,7 @@ The env file holds `KEY=VALUE` lines; blank lines and `#` comments are skipped, 
 leading `export ` and quotes around the value are dropped. A variable set to an
 empty value counts as unset.
 
-Where prtop keeps its files, unless `PRTOP_CONFIG_FILE` / `PRTOP_STATE_FILE` say
+Where prtop keeps its files, unless `PRTOP_CONFIG_FILE` / `PRTOP_STATE_DIR` say
 otherwise:
 
 | | macOS and Linux | Windows |
@@ -28,6 +28,7 @@ from pathlib import Path
 
 PREFIX = "PRTOP_"
 CONFIG_FILE_VAR = "PRTOP_CONFIG_FILE"
+FORGES = ("gitlab", "github")
 
 
 class ConfigError(ValueError):
@@ -36,13 +37,16 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Config:
-    state_file: Path
-    forge: str = "gitlab"
+    state_dir: Path
+    # The forges read, in this order: one GitLab instance, github.com, or both.
+    forges: tuple[str, ...] = ("gitlab",)
     gitlab_host: str = "gitlab.com"
     # Read from the instance when unset.
     gitlab_username: str | None = None
     # Limits the listing to one group and its subgroups; unset lists the whole instance.
     gitlab_group: str | None = None
+    # Limits the listing to one GitHub organization or user; unset lists all of github.com.
+    github_owner: str | None = None
     # See `prtop.tasks` for what each source reads.
     task_source: str = "none"
     task_branch_pattern: str | None = None
@@ -54,6 +58,11 @@ class Config:
     primary_deploy_job_pattern: str = r"^deploy[_-]production$"
     # iTerm2 only: an orange tab while an open MR is on you, green otherwise.
     iterm_tab_color: bool = False
+
+    def state_file(self, host: str) -> Path:
+        """One file per forge, so reading two, or pointing prtop at another host,
+        never reads one forge's MRs as having vanished from the other."""
+        return self.state_dir / f"{re.sub(r'[^A-Za-z0-9.-]', '_', host)}.json"
 
 
 def _text(name: str, value: str) -> str:
@@ -90,12 +99,20 @@ def _one_of(*allowed: str) -> Callable[[str, str], str]:
     return parse
 
 
+def _forges(name: str, value: str) -> tuple[str, ...]:
+    forges = tuple(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
+    if not forges or not set(forges) <= set(FORGES):
+        raise ConfigError(f"{name}={value!r}: expected gitlab, github, or gitlab,github")
+    return forges
+
+
 _SETTINGS: dict[str, tuple[str, Callable[[str, str], object]]] = {
-    "STATE_FILE": ("state_file", _path),
-    "FORGE": ("forge", _one_of("gitlab")),
+    "STATE_DIR": ("state_dir", _path),
+    "FORGES": ("forges", _forges),
     "GITLAB_HOST": ("gitlab_host", _text),
     "GITLAB_USERNAME": ("gitlab_username", _text),
     "GITLAB_GROUP": ("gitlab_group", _text),
+    "GITHUB_OWNER": ("github_owner", _text),
     "TASK_SOURCE": ("task_source", _one_of("none", "issues", "notion", "jira", "branch")),
     "TASK_BRANCH_PATTERN": ("task_branch_pattern", _regex),
     "TASK_URL": ("task_url", _text),
@@ -132,16 +149,12 @@ def config_file(environ: Mapping[str, str], platform: str = sys.platform) -> Pat
     return Path.home() / ".config" / "prtop" / ".env"
 
 
-def default_state_file(environ: Mapping[str, str], host: str, platform: str = sys.platform) -> Path:
-    """One file per instance, so pointing prtop at another host, or at two in
-    turn, never reads one instance's MRs as having vanished from the other."""
+def default_state_dir(environ: Mapping[str, str], platform: str = sys.platform) -> Path:
     if base := environ.get("XDG_STATE_HOME"):
-        directory = Path(base) / "prtop"
-    elif platform == "win32":
-        directory = Path(environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "prtop"
-    else:
-        directory = Path.home() / ".local" / "state" / "prtop"
-    return directory / f"{re.sub(r'[^A-Za-z0-9.-]', '_', host)}.json"
+        return Path(base) / "prtop"
+    if platform == "win32":
+        return Path(environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "prtop"
+    return Path.home() / ".local" / "state" / "prtop"
 
 
 def load_config(environ: Mapping[str, str] = os.environ) -> Config:
@@ -159,7 +172,5 @@ def load_config(environ: Mapping[str, str] = os.environ) -> Config:
             field, parse = _SETTINGS[name]
             settings[field] = parse(key, value)
 
-    if "state_file" not in settings:
-        host = settings.get("gitlab_host", Config.gitlab_host)
-        settings["state_file"] = default_state_file(environ, host)
+    settings.setdefault("state_dir", default_state_dir(environ))
     return Config(**settings)  # type: ignore[arg-type]

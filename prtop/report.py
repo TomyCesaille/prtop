@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
+from itertools import accumulate
 from typing import NamedTuple
 
 from prtop import model
@@ -149,16 +150,13 @@ def clip(text: str, width: int) -> str:
     hyperlink the cut falls inside closed again."""
     if display_width(text) <= width:
         return text
-    out, used, linked = [], 0, False
-    for token in _CELL_RE.findall(text):
-        if token.startswith("\033]"):
-            linked = token != _LINK_END
-        elif used + _cells(token) > width - 1:
-            break
-        else:
-            used += _cells(token)
-        out.append(token)
-    return "".join(out) + "…" + (_LINK_END if linked else "")
+    tokens = _CELL_RE.findall(text)
+    # Cells used up to and including each token, a hyperlink escape taking none.
+    # The count only grows, so the tokens kept are the start of the line.
+    used = accumulate(0 if token.startswith("\033]") else _cells(token) for token in tokens)
+    kept = [token for token, cells in zip(tokens, used) if cells <= width - 1]
+    links = [token for token in kept if token.startswith("\033]")]
+    return "".join(kept) + "…" + (_LINK_END if links and links[-1] != _LINK_END else "")
 
 
 def linked_mr_id(entry: dict, mr_id: str) -> str:

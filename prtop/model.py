@@ -13,6 +13,12 @@ class ForgeError(RuntimeError):
     """The forge did not answer, or answered something unreadable."""
 
 
+def mr_short_id(project_path: str, number: int) -> str:
+    """The `repo!number` the PR column shows, and the state-file key. The same on
+    every forge: the cell links to the merge request, which says where it lives."""
+    return f"{project_path.rsplit('/', 1)[-1]}!{number}"
+
+
 # Review states of an open merge request. A state the forge cannot map passes
 # through under its own raw name, and the report surfaces it as unrecognised.
 DRAFT = "draft"

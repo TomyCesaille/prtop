@@ -2,19 +2,17 @@
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from prtop import model
 from prtop.config import Config
 from prtop.forges.gitlab import (
     REVIEW_STATUS,
     GitLab,
-    ProdJobs,
-    classify_pending,
-    mr_short_id,
     project_path_from_summary,
     unresolved_threads_await_user,
 )
-from prtop.model import DeployState, ForgeError
+from prtop.model import ForgeError, mr_short_id
 from prtop.report import REVIEW_SIGNAL
 from prtop.tasks import IssueTasks, NoTasks, task_source
 
@@ -27,17 +25,18 @@ ME = "john.doe"
 QUERY = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100"
 LIST_ALL = f"merge_requests?{QUERY}"
 
-_defaults = Config(state_file=Path("unused"))
-PROD_JOBS = ProdJobs(_defaults.deploy_job_pattern, _defaults.primary_deploy_job_pattern)
-
 
 class FakeGitLab(GitLab):
     """Serves `responses[path]`; a path it was not given fails like an outage."""
 
     def __init__(self, responses: dict, **settings):
-        super().__init__(Config(state_file=Path("unused"), gitlab_host=HOST, **settings))
+        super().__init__(Config(state_dir=Path("unused"), gitlab_host=HOST, **settings), sleep=self.sleep)
         self.responses = responses
         self.calls: list[str] = []
+        self.sleeps: list[float] = []
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
 
     def api(self, path):
         self.calls.append(path)
@@ -159,6 +158,31 @@ class OpenMergeRequests(unittest.TestCase):
         with self.assertRaises(ForgeError):
             FakeGitLab({}).open_merge_requests(NoTasks())
 
+    def test_an_mr_whose_project_cannot_be_told_is_skipped(self):
+        forge = FakeGitLab({LIST_ALL: [{"iid": 7}]})
+        self.assertEqual(forge.open_merge_requests(NoTasks()), {})
+
+    def test_a_reviewer_thread_on_a_later_page_still_awaits_you(self):
+        responses = open_mr("discussions_not_resolved")
+        responses[f"{MR}/discussions?per_page=100&page=1"] = [thread(ME)] * 100
+        responses[f"{MR}/discussions?per_page=100&page=2"] = [thread("alice.martin")]
+        entry = FakeGitLab(responses, gitlab_username=ME).open_merge_requests(NoTasks())["frontend!7"]
+        self.assertTrue(entry["threads_await_user"])
+
+    def test_discussions_are_read_ten_pages_deep_at_most(self):
+        responses = open_mr("discussions_not_resolved")
+        for page in range(1, 12):
+            responses[f"{MR}/discussions?per_page=100&page={page}"] = [thread(ME)] * 100
+        forge = FakeGitLab(responses, gitlab_username=ME)
+        forge.open_merge_requests(NoTasks())
+        self.assertEqual(sum("/discussions" in call for call in forge.calls), 10)
+
+    def test_every_call_names_the_instance(self):
+        forge = GitLab(Config(state_dir=Path("unused"), gitlab_host=HOST))
+        with mock.patch("prtop.forges.gitlab.get_json", return_value=[]) as get_json:
+            self.assertEqual(forge.api("user"), [])
+        self.assertEqual(get_json.call_args.args[0], ["glab", "api", "--hostname", HOST, "user"])
+
 
 class Tasks(unittest.TestCase):
     def test_an_mr_closing_an_issue_takes_it_as_its_task(self):
@@ -175,7 +199,7 @@ class Tasks(unittest.TestCase):
 
     def test_a_branch_based_source_costs_no_issue_call(self):
         forge = FakeGitLab(open_mr(source_branch="PROJ-9-login"))
-        entry = forge.open_merge_requests(task_source(Config(state_file=Path("u"), task_source="jira")))["frontend!7"]
+        entry = forge.open_merge_requests(task_source(Config(state_dir=Path("u"), task_source="jira")))["frontend!7"]
         self.assertEqual(entry["task"], "PROJ-9 login")
         self.assertNotIn(f"{MR}/closes_issues", forge.calls)
 
@@ -198,6 +222,27 @@ class Merges(unittest.TestCase):
     def test_an_mr_closed_without_merging_is_not_tracked(self):
         forge = FakeGitLab({MR: {"state": "closed"}})
         self.assertIsNone(forge.merged_deployment({"project_path": PROJECT, "iid": 7}))
+
+    def test_an_entry_that_names_no_mr_is_not_tracked(self):
+        self.assertIsNone(FakeGitLab({}).merged_deployment({"title": "x"}))
+
+    def test_when_the_merge_commits_pipeline_never_shows_the_latest_one_stands_in(self):
+        responses = self.merged()
+        responses[f"projects/{ENCODED}/pipelines?ref=develop&per_page=10"] = [{"id": 8, "sha": "zzz"}]
+        responses[f"projects/{ENCODED}/pipelines?ref=develop&per_page=5"] = [{"id": 8, "sha": "zzz"}]
+        forge = FakeGitLab(responses)
+        self.assertEqual(forge.merged_deployment({"project_path": PROJECT, "iid": 7})["pipeline_id"], 8)
+        self.assertEqual(forge.sleeps, [2, 2])
+
+    def test_a_merge_gitlab_names_no_commit_for_goes_to_the_latest_pipeline(self):
+        responses = {MR: {"state": "merged"}, f"projects/{ENCODED}/pipelines?ref=main&per_page=5": [{"id": 4}]}
+        forge = FakeGitLab(responses)
+        self.assertEqual(forge.merged_deployment({"project_path": PROJECT, "iid": 7})["pipeline_id"], 4)
+        self.assertEqual(forge.sleeps, [])
+
+    def test_a_branch_without_any_pipeline_has_nothing_to_track(self):
+        responses = {MR: {"state": "merged"}, f"projects/{ENCODED}/pipelines?ref=main&per_page=5": []}
+        self.assertIsNone(FakeGitLab(responses).merged_deployment({"project_path": PROJECT, "iid": 7}))
 
 
 class Deployments(unittest.TestCase):
@@ -229,41 +274,31 @@ class Deployments(unittest.TestCase):
         state = FakeGitLab({self.PIPELINES: []}).deploy_states({"frontend!7": self.dep()})["frontend!7"]
         self.assertEqual(state.kind, model.CHECK_FAILED)
 
+    def test_the_frontier_looks_past_pipelines_that_did_not_ship(self):
+        forge = FakeGitLab({
+            self.PIPELINES: [{"id": 9}, {"id": 13}],
+            f"projects/{ENCODED}/pipelines/13/jobs?per_page=100": [job("manual")],
+            f"projects/{ENCODED}/pipelines/9/jobs?per_page=100": [job("success")],
+        })
+        self.assertEqual(forge.deploy_states({"frontend!7": self.dep(9)})["frontend!7"].kind, model.SHIPPED)
 
-class PendingDeploys(unittest.TestCase):
-    def classify(self, pipeline_status, *jobs):
-        return classify_pending(pipeline_status, list(jobs), PROD_JOBS, "u")
+    def test_its_own_successful_deploy_ships_it_when_no_frontier_is_found(self):
+        forge = FakeGitLab({
+            self.PIPELINES: [],
+            f"projects/{ENCODED}/pipelines/10": {"status": "success"},
+            f"projects/{ENCODED}/pipelines/10/jobs?per_page=100": [job("success")],
+        })
+        self.assertEqual(forge.deploy_states({"frontend!7": self.dep()})["frontend!7"].kind, model.SHIPPED)
 
-    def test_a_running_pipeline_is_in_flight(self):
-        self.assertEqual(self.classify("running"), DeployState(model.PIPELINE_RUNNING, "running"))
-
-    def test_a_failed_pipeline_failed(self):
-        self.assertEqual(self.classify("failed").kind, model.PIPELINE_FAILED)
-
-    def test_a_project_without_a_prod_job_says_so(self):
-        self.assertEqual(self.classify("success", job("success", "test")).kind, model.NO_PROD_JOB)
-
-    def test_a_failed_production_job_failed(self):
-        self.assertEqual(self.classify("success", job("failed")).kind, model.PROD_FAILED)
-
-    def test_a_running_production_job_is_deploying(self):
-        self.assertEqual(self.classify("success", job("running")).kind, model.PROD_DEPLOYING)
-
-    def test_a_manual_production_job_awaits_its_trigger(self):
-        self.assertEqual(self.classify("success", job("manual")), DeployState(model.AWAITING_TRIGGER, url="u"))
-
-
-class ProductionJobs(unittest.TestCase):
-    def test_an_auxiliary_job_left_manual_does_not_hide_that_the_app_shipped(self):
-        jobs = [job("success"), job("manual", "deploy_production_heavy_duty")]
-        self.assertTrue(PROD_JOBS.shipped(jobs))
-
-    def test_prod_test_and_migrate_jobs_are_not_deploys(self):
-        jobs = [job("failed", "test_scenarios_production"), job("failed", "migrate_production")]
-        self.assertEqual(PROD_JOBS.primary(jobs), [])
-
-    def test_without_the_canonical_job_any_prod_deploy_job_decides(self):
-        self.assertTrue(PROD_JOBS.shipped([job("success", "deploy-prod-eu")]))
+    def test_a_pipeline_without_a_production_job_ends_the_tracking(self):
+        dep = self.dep()
+        forge = FakeGitLab({
+            self.PIPELINES: [],
+            f"projects/{ENCODED}/pipelines/10": {"status": "success"},
+            f"projects/{ENCODED}/pipelines/10/jobs?per_page=100": [job("success", "test")],
+        })
+        self.assertEqual(forge.deploy_states({"frontend!7": dep})["frontend!7"].kind, model.NO_PROD_JOB)
+        self.assertNotIn("prod_job_id", dep)
 
 
 class MrIds(unittest.TestCase):
