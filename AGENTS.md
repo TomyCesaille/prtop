@@ -117,7 +117,9 @@ ruff check
 
 The tests need neither network nor `glab`: forges answer from memory, and the live
 view runs against a fake terminal and clock. Two tests run `prtop --demo` in a
-pseudo-terminal on POSIX.
+pseudo-terminal on POSIX. CI (`.github/workflows/ci.yml`) runs them on Linux, macOS
+and Windows with Python 3.14 and 3.15, installs the package and runs the command it
+installs, and lints with a pinned ruff.
 
 Never point a development run at your real state file: a run moves the
 merge-detection baseline, so a merge that happened since the last real run would

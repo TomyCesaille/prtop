@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # A release gets a week in the open before it is proposed here.
+    cooldown:
+      default-days: 7
