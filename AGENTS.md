@@ -1,312 +1,135 @@
-# AGENTS.md — notes for future LLM edits
+# AGENTS.md
 
-This repo is the deterministic, **no-LLM** data-gathering engine behind the
-`/monitor-prs` Claude Code skill. The skill runs `monitor_prs.py` once
-per check, reads its stdout, and handles all user interaction and GitLab
-mutations itself. When changing behaviour here, keep the skill's
-interpretation table in sync.
+Notes for an AI agent changing prtop. [README.md](README.md) says what prtop does;
+this file says how the code is laid out and the rules it holds to.
 
-## Division of responsibilities
+## Layout
 
-- **This script**: read-only against GitLab. Fetch, diff, track, report,
-  suggest. One run per invocation — no loop, no prompts, no merges, no
-  rebases, no job triggers.
-- **The skill** (`~/.claude/commands/monitor-prs.md`): relays the
-  report, asks the user for confirmations, and performs approved actions via
-  `glab api`. Looping lives in `monitor-prs-looped.md`.
-- **`watch_prs.sh`**: passive watcher for task-development sessions. Re-runs
-  `monitor_prs.py` on an interval and exits when the report changes (activity
-  alert, or any diff in the normalized output) or on a quiet-cap TIMEOUT, so a
-  backgrounded run re-invokes the calling agent at the right moment. The
-  "Passive PR monitoring" section of the global `~/.claude/CLAUDE.md` tells
-  sessions when to start it.
+Standard library only, Python 3.14 or later. `glab` is the one outside tool.
 
-## Source of truth
+| Module | Holds |
+|---|---|
+| `prtop/cli.py` | The command: one fetch (`run_check`), the choice between the live view and one table, `watch`, the arguments. |
+| `prtop/live.py` | The live view: the frame, the fetch loop, the keys. Pure enough to test with a fake terminal and clock. |
+| `prtop/terminal.py` | The real terminal: alternate screen, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
+| `prtop/report.py` | Marks, Status cells, row order and the table. The accessibility contract lives here. |
+| `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, `ForgeError`. |
+| `prtop/forges/` | One module per forge behind the `Forge` protocol. `gitlab.py` owns every GitLab call and field name. |
+| `prtop/tasks.py` | Task sources: what fills the Task column. |
+| `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
+| `prtop/state.py` | The state file, written atomically. |
+| `prtop/demo.py` | The made-up report behind `--demo`. |
 
-- Skill: `~/.claude/commands/monitor-prs.md`
-  (looped variant: `monitor-prs-looped.md`)
-- This Python engine: `monitor_prs.py`
+## Rules to hold
 
-The report is **one table** (`⟨mark⟩ | PR title | Task | PR | Status`) — nothing
-else, no tally and no status line. Open MRs come first with their
-review status; merged-but-not-yet-deployed MRs sit at the bottom with their
-deploy status in the same Status column. No activity-delta alerts, no prose
-suggestion sections; the skill reads the mark and Status columns directly. The
-merged rows are informational only; the skill relays them but never acts on them.
-If you change the marks, the Status labels, or the columns, update the skill's
-interpretation table.
+- **Read-only against the forge.** `GitLab.api` issues GETs and nothing else.
+  Merging, rebasing and triggering jobs belong to whoever reads the report.
+- **Output that is not a terminal is one table and nothing else.** Agents parse it.
+  The live view's status line, key bar and highlighting never reach it, and errors
+  go to stderr.
+- **A forge that does not answer degrades the report, never fails it.** One
+  `! 🔌 instance unreachable` row stands in for the open merge requests, marked `!`
+  because a green tab would claim all-clear over merge requests nobody saw. The
+  previous open entries stay in the state file, not in the table: they are the
+  baseline that tells the next fetch what merged, so an outage never reads as a
+  wave of merges. A merge check that fails keeps its entry in that baseline and is
+  asked about again on the next fetch.
+- **Production is judged against a frontier.** Per project and branch, the
+  frontier is the newest pipeline whose primary production job succeeded. A
+  merged merge request whose pipeline id is at or below it is in production, even
+  when its own job never ran: a branch's history is linear, so a later deploy
+  carries the earlier commits. A pipeline that finished with no production job
+  ends the tracking too (`model.FINISHED`).
+- **`action_needed` counts open merge requests only.** Deploy rows carry `!` marks
+  of their own but never turn the tab orange.
+- **Your own unresolved threads are hints, not feedback.** A thread only you wrote
+  in reads as `awaiting review`, or as `resolve own threads` once the merge request
+  is approved. One note from anyone else makes it `unresolved threads`.
+- **Conflicts outrank the review state.** GitLab reports `has_conflicts` apart from
+  `detailed_merge_status`, which can still say `not_approved`.
 
-**Accessibility contract.** The report is read by scanning, and must not rely on
-color, emoji fidelity, or fine glyph detail. So state is encoded four times over,
-weakest channel last:
+### The accessibility contract
 
-1. **Severity mark** — plain ASCII, one cell wide. This is the channel that must
-   never regress.
+The report is read by scanning, by people who cannot all rely on colour, emoji
+fidelity or fine glyph detail. Each state is told four ways, weakest last:
 
-   | Mark | Meaning |
-   |---|---|
-   | `!` | on the user now |
-   | `?` | on the user to look at or reply to |
-   | `~` | on someone else; it sits there until a person moves |
-   | `.` | on a machine; it resolves by itself |
+1. **Mark**: one ASCII character, from heaviest to lightest shape: `!` on you now,
+   `?` on you to look at, `~` on someone else, `.` on a machine.
+2. **Position**: rows sort by mark, and a rule separates each mark's block.
+3. **Label**: plain words that stand on their own (`conflicts, unapproved`).
+4. **Glyph**: garnish. One code point that every terminal draws two cells wide;
+   never the only difference between two states; never two meanings across the
+   open and deploy halves of the Status column.
 
-   The marks also read as a weight gradient (`!` heaviest → `.` lightest), so
-   the eye finds the top of the table without resolving the characters. Keep any
-   new mark inside that gradient.
-2. **Position** — rows sort by mark, then by task, repo and MR number, and
-   `_split_by_mark` rules off each severity block, so a block can be read without
-   scanning the marks at all and one task's MRs stay adjacent inside it.
-3. **Text label** (`conflicts, unapproved`) — unambiguous on its own. Plain words
-   rather than GitLab's `detailed_merge_status` enum, and short enough to fit
-   `STATUS_WIDTH`; the approval state rides along as `, approved` / `, unapproved`
-   except where the label already implies it (`draft`, `awaiting review`).
-4. **Glyph** — redundant garnish. Never the sole carrier of a distinction, never
-   two different meanings across the open/deploy halves of the Status column, and
-   never distinguished from another glyph by hue alone.
+Adding a state means choosing its mark first and its glyph last. The
+`AccessibilityContract` tests in `tests/test_report.py` hold these rules.
 
-Adding a state means picking its mark first and its glyph last. `test_status.py`
-holds this contract as executable tests — an `AccessibilityContract` case fails
-if a state goes glyph-only, a mark stops being single-char ASCII, or a glyph
-picks up a second meaning.
+### The table
 
-## Architecture
+- Pad through `display_width`, never `len` or `str.ljust`: an emoji is one code
+  point and two cells, and a hyperlink's escapes take no cell at all.
+- The Status column is floored at `STATUS_WIDTH`, the widest cell the vocabulary
+  produces, so one merge request changing state does not reflow every row and
+  `prtop watch` reports the row that moved rather than a table that shifted. A
+  longer label means raising the constant; a test enumerates the vocabulary.
+- Links are OSC 8 hyperlinks ended by BEL, which `plain` strips for comparisons
+  and widths.
 
-Single file, stdlib only. Sections in order:
+## GitLab
 
-1. **Configuration constants** (`GITLAB_HOST`, `GITLAB_USERNAME`,
-   `GITLAB_GROUP`, `TRIGRAM`, `STATE_FILE`, regexes).
-2. **`_run` / `glab_api`** — subprocess wrappers around `glab api`. All GitLab
-   calls go through `glab_api`; never construct HTTP requests directly.
-   `glab_api` is GET-only by design — keep it that way. It passes `--hostname`
-   on every call (see **The GitLab instance**).
-3. **State I/O** — `load_state` / `save_state`. Atomic write via `.json.tmp`.
-4. **Fetch & gather** — `fetch_open_mr_summaries` (group-level list),
-   `fetch_mr_detail` (per-MR hydration, two API calls, plus `fetch_discussions`
-   on an MR whose threads block the merge), `gather_open_mrs`
-   (ThreadPoolExecutor fan-out across the MRs, guarded so GitLab not answering
-   comes back as an error rather than an exception).
-5. **Track merges** — `track_vanished_mrs` resolves MRs that left the open list;
-   a merged one gets a `deployments` entry pointing at its merge-commit main
-   pipeline (pure side effect, no output). `open_mr_rows` builds the open-MR
-   rows for the table.
-6. **Deployments** — `check_deployments` classifies each tracked MR against a
-   per-project **production frontier** (`latest_prod_shipped_pipeline_id`: the
-   highest `main` pipeline whose prod deploy jobs succeeded). Any MR whose merge
-   pipeline id is ≤ that frontier is in prod → dropped from tracking; the rest
-   are returned as rows (with a status from `pending_deploy_status`) that
-   `run_once` appends to the bottom of the same table. Frontiers (per project)
-   and per-MR evaluation both fan out over a `ThreadPoolExecutor`. Purely
-   informational — never contributes to `action_needed`.
-7. **iTerm tab colour** — OSC escape codes, emitted once at the very end. It is
-   a convenience duplicate of the `!` block at the top of the table, never the
-   only place a state is reported.
-8. **`run_once` / `main`** — top-level flow and CLI; single check by default,
-   `--loop [SECONDS]` for wall-clock-aligned repetition. In `--loop` mode the
-   only chrome is one `next tick @ <date HH:MM>` line before each sleep.
+- `--hostname` goes on every `glab api` call; without it `glab` picks the host
+  from the working directory's git remote.
+- Project paths are URL-encoded in API paths (`urllib.parse.quote(path, safe="")`).
+- `detailed_merge_status` names one blocker at a time, so the approval state is
+  read from `/approvals`. It reports `not_approved` ahead of `need_rebase`, so a
+  merge request in review that fell behind its target is found through
+  `diverged_commits_count`.
+- `/discussions` paginates; a bot-reviewed merge request runs past one page.
+- Right after a merge, the branch pipeline may not exist yet: the merge commit's
+  pipeline is looked for a few times before the latest one stands in.
 
-## The GitLab instance
+## State file
 
-Every repo lives on the company's self-hosted GitLab, `gitlab.example.com`,
-under the `acme` root group. The three `GITLAB_*` constants are the whole
-config:
-
-```python
-GITLAB_HOST = "gitlab.example.com"
-GITLAB_USERNAME = "john.doe"
-GITLAB_GROUP = "acme"
-```
-
-- **`--hostname` is passed on every `glab api` call.** Without it `glab`
-  resolves the host from the git repo the working directory sits in (gitlab.com
-  outside one), so a run started from the wrong checkout would query the wrong
-  instance.
-- **GitLab not answering degrades the run, it doesn't fail it.**
-  `gather_open_mrs` catches `GlabError` around both the listing and the MRs'
-  hydration (the instance can drop between the two) and hands `run_once` the
-  error instead. Three rules hold the honesty:
-  - `unreachable_row` stands in for the open MRs: one row marked **`!`**, titled
-    with the hostname, status `⚠️ instance unreachable`. `!` rather than `?`
-    because it feeds `action_needed`: a green tab claims all-clear, which the run
-    cannot claim over MRs it never saw.
-  - The `glab` error goes to **stderr**, never the table — the report stays one
-    table, and `watch_prs.sh` still captures it via `2>&1`.
-  - `run_once` **carries the previous `open_mrs` entries into the saved state**
-    but not into the rows. They are the merge-detection baseline: dropping them
-    would lose an MR that merges mid-outage, and rendering them would report a
-    status the run could not confirm. `track_vanished_mrs` then sees them as
-    still-present and can't read the outage as a wave of merges.
-  `check_deployments` follows the same shape: a frontier lookup that fails falls
-  back to `None`, so evaluation drops to the MR's own pipeline and reports
-  `⚠️ check failed` on that row alone.
-- **Every URL is built from `GITLAB_HOST`** — the PR-cell hyperlink
-  (`_linked_mr_id`) and the awaiting-prod-trigger commits link
-  (`pending_deploy_status`).
-
-## State schema
-
-`~/.claude/pr-monitor-state.json`
+Keyed by the `repo!iid` the PR column shows.
 
 ```jsonc
 {
-  "open_mrs":    { "<repo>!<iid>": { title, task_name, note_count, state,
-                                 approvals[], fully_approved, has_conflicts,
-                                 merge_status, threads_await_user,
-                                 project_path, iid, web_url, last_checked } },
-  "deployments": { "<repo>!<iid>": { title, task_name, project (url-encoded),
-                                 project_path, iid, web_url, pipeline_id,
-                                 pipeline_status, pipeline_url, prod_job_id? } },
-  "last_checked": "<iso>"
+  "open_mrs": {
+    "web!1931": { "title", "task", "task_url", "status", "fully_approved",
+                  "has_conflicts", "threads_await_user", "approvals", "note_count",
+                  "project_path", "iid", "web_url", "last_checked" }
+  },
+  "deployments": {
+    "api!2544": { "title", "task", "task_url", "project_path", "iid", "web_url",
+                  "ref", "pipeline_id", "pipeline_status", "pipeline_url",
+                  "prod_job_id" }
+  },
+  "last_checked": "<ISO 8601>"
 }
 ```
-
-The key is the `<repo>!<iid>` the PR column shows (`mr_short_id`).
-`project_path`/`iid` in `open_mrs` are what let `track_vanished_mrs` recognise a
-vanished MR as merged. Legacy deployment entries may still carry a `stage`
-field; `check_deployments` pops it.
-
-## glab quirks
-
-- **`glab api` does not accept `--jq`** — pipe through `json.loads` and filter
-  in Python.
-- **`glab api --hostname <host>`** picks the instance; the token lives in
-  `~/Library/Application Support/glab-cli/config.yml` and `glab auth status`
-  shows it. A group path with a `/` in it is URL-encoded the same way a project
-  path is.
-- **Project paths must be URL-encoded** in `glab api` paths
-  (`acme/web/frontend` → `acme%2Fweb%2Ffrontend`). Use
-  `urllib.parse.quote(path, safe="")`.
-- `user_notes_count` on the MR object excludes system notes — it's recorded in
-  the state as `note_count` (not currently surfaced in the report). Don't
-  paginate `/notes` to count.
-- The group endpoint
-  `groups/acme/merge_requests?assignee_username=…&state=opened&per_page=100`
-  returns subgroup MRs too. `references.full` gives `"<full-path>!<iid>"`.
-- The production *deploy* job is recognised by name match
-  `deploy.*prod|prod.*deploy` (`DEPLOY_PROD_JOB_RE`, case-insensitive). This
-  deliberately excludes prod *test*/*migrate*/*route-traffic* jobs (e.g.
-  `test_scenarios_production`, `migrate_production`, `route_traffic_production`)
-  that a looser `prod|production` match would wrongly pick up.
-- **"Shipped prod" is judged by the _primary_ deploy job** — the one whose name
-  is exactly `deploy_production`/`deploy-production` (`PRIMARY_PROD_DEPLOY_RE`),
-  via `primary_prod_jobs` → `shipped_prod`. The auxiliary suffixed variants
-  (`deploy_production_heavy_duty`, `deploy_production_certificates_exporter`, …)
-  are separate side services, often left `manual`/`created` indefinitely;
-  gating on *all* prod-deploy jobs succeeding wrongly reports the app as
-  never-deployed. Only when no canonical-named job exists does it fall back to
-  "any prod-deploy job succeeded".
-- Right after a merge, the pipeline on `main` may not exist yet.
-  `find_main_pipeline_for_sha` polls a few times before giving up, then
-  `track_vanished_mrs` falls back to the most recent main pipeline.
-- GitLab recomputes `has_conflicts`/`detailed_merge_status` lazily — a
-  conflict can show up with `merge_status` still `not_approved`, which is why
-  `action_needed` checks `has_conflicts` independently of `merge_status`.
-- **`detailed_merge_status` names one blocker**, so `discussions_not_resolved`
-  hides the approval state — which is why the report keeps reading it from
-  `/approvals` and appending it as `, approved` / `, unapproved`.
-- `/merge_requests/<iid>/discussions` is where thread state lives: resolvability
-  and resolution are per *note* (`resolvable`, `resolved`), a thread is
-  unresolved when any of its notes is, and plain comments come back as
-  `individual_note` discussions whose notes aren't resolvable. It paginates —
-  `fetch_discussions` walks up to ten pages, because a CodeRabbit-reviewed MR
-  runs past one and a single reviewer thread anywhere in them decides the
-  status.
-
-## Behavioural rules to preserve
-
-- **The script never mutates GitLab.** Merging, rebasing, and playing jobs
-  are the skill's job, gated on user confirmation there. Don't add `--method`
-  support back to `glab_api`.
-- **One run per invocation by default.** `--loop [SECONDS]` is the only loop
-  (wall-clock-aligned, for standalone terminal use; `glab` errors are
-  non-fatal there). Never add prompts back in either mode.
-- **First run** records a baseline; `track_vanished_mrs` sees an empty previous
-  set, so nothing is detected as merged on that run.
-- **Report is one table, nothing else** (no status line). Open MRs on top,
-  merged-awaiting-deploy rows at the bottom, split by a separator rule (a `None`
-  entry in the rows list, which `_render_table` renders as a horizontal rule).
-  Rebase-safety nuance (which projects reset approvals on push) now lives in the
-  skill, not here — don't reintroduce prose alert/suggestion sections or a second
-  table.
-- **Production-frontier model**: an MR is judged deployed against a single
-  per-project frontier, not just its own pipeline — so an MR carried to prod by
-  a *later* commit is correctly treated as shipped and dropped, even if its own
-  prod job was never triggered. Compare merge-pipeline id ≤ frontier id (`main`
-  is linear, so pipeline id order == commit order).
-- **`action_needed` covers open-PR work only** — derived as "any open row marked
-  `!`", which is a fully-approved mergeable MR, a needed rebase, or conflicts.
-  Deploy rows carry `!` marks of their own (failed pipeline, awaiting prod
-  trigger) but are excluded from the flag, so deployment status never flips the
-  tab colour.
-- **The user's own unresolved threads are hints, not feedback.** A thread he
-  opened on his own MR that nobody answered is something he left for the
-  reviewer, so `? 💬 unresolved threads` would put his own note back on his
-  plate. `unresolved_threads_await_user` decides it — one note from anyone else
-  in an unresolved thread makes the whole MR feedback to answer again — and
-  `fmt_status` swaps the status for `not_approved` while the review is still
-  outstanding, or for the synthetic `own_threads_unresolved`
-  (`! 🧵 resolve own threads`) once the MR is approved and those threads are all
-  that blocks the merge.
-- **`has_conflicts` outranks `detailed_merge_status`.** GitLab sets the two
-  independently and reports `not_approved` on MRs that do have conflicts;
-  `fmt_status` rewrites the status to `conflict` so the mark, glyph, and label
-  agree instead of the conflict showing up only as an orange tab.
-- **The PR cell is an OSC 8 terminal hyperlink** (`_linked_mr_id`) to the merge
-  request: `web_url` for an open MR, rebuilt from `project_path` and the number
-  in the MR id for a pending deploy. `_sort_key` reads that cell, so it parses
-  `repo!iid` out of `_plain(row.pr)` — the escapes would otherwise defeat the
-  backtick strip.
-- **`🕹️ awaiting prod trigger` is an OSC 8 terminal hyperlink** (`_hyperlink`,
-  BEL-terminated) to the project's `/-/commits/main?ref_type=HEADS` page (built
-  from the deployment entry's `project_path`) — that page is where the manual
-  prod job gets triggered from. Not a markdown link: the terminal would show
-  the URL raw. BEL termination keeps it stripped by `watch_prs.sh`'s
-  `normalize` and by `_display_width`, so it never skews diffs or padding.
-  Keep the label text inside the link unchanged; the skill matches on it.
-- **iTerm colour at the very end**, exactly once, after the table.
-- **Table padding goes through `_display_width`, never `len`/`str.ljust`.** A
-  single-codepoint emoji in the Status column (👀, ✅, …) is 1 code point but 2
-  terminal cells; padding by `len` under-counts it and skews the right border.
-- **The Status column is floored at `STATUS_WIDTH`** (via `MIN_WIDTHS`), the
-  widest cell the status vocabulary can produce, so one MR changing state can't
-  reflow the whole table. `watch_prs.sh` exits on any text change and hands the
-  new report to an agent to read: with a floating column every row's padding
-  shifts at once, hiding which row actually moved. A new or longer status label
-  means updating the constant; `test_status.py` enumerates the vocabulary and
-  fails if it drifts either way.
 
 ## Testing
 
 ```bash
-python3 test_status.py
+python -m unittest
+ruff check
 ```
 
-`test_status.py` covers the pure layer — severity marks, deploy signals, the
-accessibility contract, ordering, and table rendering. Stdlib
-`unittest`, no network, no state file. Run it after any change to marks, glyphs,
-status labels, or the table; add a case alongside each new state.
+The tests need neither network nor `glab`: forges answer from memory, and the live
+view runs against a fake terminal and clock. Two tests run `prtop --demo` in a
+pseudo-terminal on POSIX.
 
-Everything above that layer (GitLab fetching, merge detection, the production
-frontier) has no automated coverage and needs a real run. Don't run the script
-against the live state file for testing — a run advances the merge-detection
-baseline (an MR that merged between the real last run and your test run would be
-recorded as tracked/handled and missed by the next real run). Point
-`PR_MONITOR_STATE_FILE` at a scratch copy instead:
+Never point a development run at your real state file: a run moves the
+merge-detection baseline, so a merge that happened since the last real run would
+be consumed by the test. Use a scratch copy:
 
 ```bash
-cp ~/.claude/pr-monitor-state.json /tmp/scratch-state.json
-PR_MONITOR_STATE_FILE=/tmp/scratch-state.json python3 monitor_prs.py
+PRTOP_STATE_FILE=/tmp/prtop-scratch.json prtop
 ```
 
-To exercise `track_vanished_mrs`, seed the scratch state's `open_mrs` with a
-real, already-merged MR (with `project_path` + `iid`) and run.
+## Conventions
 
-To test `watch_prs.sh` deterministically, copy it next to a stub
-`monitor_prs.py` whose output changes on the Nth run — the watcher only knows
-"the script in my directory", so no GitLab is involved.
-
-## What NOT to do
-
-- Don't add a dependency on `requests`, `aiohttp`, etc. Stdlib + `glab` only.
-- Don't write to `~/.claude/` other than `pr-monitor-state.json`.
-- Don't change the state-file schema without also updating the skill.
-- Don't add LLM calls, interactive prompts, or GitLab mutations.
+- Test names state behaviour in the user's words:
+  `test_a_deployment_that_shipped_leaves_the_report`.
+- Comments describe the code as it is, with no reference to what it used to be.
+- Commit titles follow Conventional Commits (`feat:`, `fix:`, `refactor:`…).

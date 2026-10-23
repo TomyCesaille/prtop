@@ -1,12 +1,15 @@
 """Settings from the environment and the env file."""
 
 import io
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from prtop.config import ConfigError, config_file, default_state_file, load_config, read_env_file
+from prtop.config import _SETTINGS, ConfigError, config_file, default_state_file, load_config, read_env_file
+
+EXAMPLE = Path(__file__).parents[1] / ".env.example"
 
 
 class Settings(unittest.TestCase):
@@ -79,6 +82,15 @@ class Settings(unittest.TestCase):
     def test_an_env_file_is_read_as_utf8_whatever_the_locale(self):
         self.write_env_file("").write_bytes("PRTOP_GITLAB_GROUP=équipe\n".encode())
         self.assertEqual(self.load().gitlab_group, "équipe")
+
+    def test_the_example_env_file_lists_every_setting(self):
+        listed = set(re.findall(r"^# PRTOP_(\w+)=", EXAMPLE.read_text(), re.MULTILINE))
+        self.assertEqual(listed, set(_SETTINGS) - {"FORGE"})
+
+    def test_the_example_env_file_loads_once_uncommented(self):
+        lines = EXAMPLE.read_text().replace("# PRTOP_", "PRTOP_").splitlines()
+        path = self.write_env_file("\n".join(line for line in lines if not line.startswith("#")))
+        self.assertEqual(self.load(PRTOP_CONFIG_FILE=str(path)).task_source, "none")
 
     def test_a_line_without_a_value_points_at_its_line_number(self):
         path = self.write_env_file("PRTOP_GITLAB_HOST=gitlab.example.com\nPRTOP_GITLAB_GROUP\n")

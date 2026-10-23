@@ -17,8 +17,10 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
-    "Operating System :: POSIX",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Version Control :: Git",
 ]
 

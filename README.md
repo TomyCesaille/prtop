@@ -1,188 +1,234 @@
-# monitor-prs
+# prtop
 
-Data-gathering engine behind the `/monitor-prs` Claude Code skill.
-Polls GitLab via the `glab` CLI, diffs state, alerts on changes, and tracks
-production deployments — **without consuming any LLM tokens**.
+The merge requests assigned to you, from review to production, in one terminal
+table that refreshes in place, the way `htop` shows processes.
 
-The script is strictly **read-only against GitLab**: it never merges, rebases,
-or triggers jobs. It reports what changed and what awaits action; acting on
-the report is the caller's job (the skill asks for confirmation and runs the
-`glab` mutation, or you do it by hand).
+![prtop in a terminal: open merge requests on top, merged ones on their way to production below](docs/prtop.png)
 
-State lives in `~/.claude/pr-monitor-state.json`.
+prtop reads GitLab through the [`glab`](https://gitlab.com/gitlab-org/cli) CLI
+and never writes to it: it does not merge, rebase, or trigger a job. Each merge
+request assigned to you gets one row, marked with whose move it is. Once one
+merges, prtop follows its pipeline to production and drops the row when
+production runs it.
 
-## Requirements
+## Install
 
-- Python 3.10+ (stdlib only — no `pip install` needed)
-- [`glab`](https://gitlab.com/gitlab-org/cli) authenticated on
-  `gitlab.example.com` as `john.doe` (`glab auth status` shows it)
-- macOS iTerm2 (optional; tab colour and the table's hyperlinks use OSC escape codes that other terminals ignore)
-
-## The GitLab instance
-
-Every repo lives on the company's self-hosted GitLab, `gitlab.example.com`,
-under the `acme` root group. The `GITLAB_*` constants in `monitor_prs.py`
-name the instance, the user's handle there (`john.doe`) and the group
-whose MRs are listed (subgroups included).
-
-GitLab not answering never fails the run, and is never silent either: one row
-stands in for the open MRs (`! ⚠️ instance unreachable`, titled with the
-hostname) and the tab turns orange, because green would be claiming all-clear
-over MRs the run never saw. The `glab` error goes to stderr, keeping the report
-one table. The previous open MRs stay in the state file though they're not shown
-— that's the merge-detection baseline, so one merging mid-outage is still caught
-on the next run.
-
-## Usage
+prtop reads GitLab as you, through `glab`, so sign `glab` in to your instance
+first:
 
 ```bash
-# One check, then exit (what the /monitor-prs skill runs).
-python3 monitor_prs.py
-
-# Standalone terminal mode: repeat forever, aligned to wall-clock ticks
-# (:00, :05, :10, … with the default 300s). Ctrl+C to stop.
-python3 monitor_prs.py --loop        # every 5 min
-python3 monitor_prs.py --loop 600    # custom interval in seconds
-
-# Passive watcher: re-run the check on an interval and exit as soon as the
-# report changes (a status/approval change, a merge, deployment progress) —
-# designed to be launched as a background task by an LLM session so it gets
-# re-invoked when something changes. Prints a TIMEOUT line after the cap.
-bash watch_prs.sh                 # defaults: 300s interval, 7200s cap
-bash watch_prs.sh 60 3600         # custom interval / cap
+glab auth login --hostname gitlab.example.com
 ```
 
-Exit code is 1 (with the error on stderr) if `glab` fails; the watcher also
-exits 1 when a check fails. In `--loop` mode `glab` errors are non-fatal —
-the cycle logs them to stderr and retries at the next tick.
+| Where | How |
+|---|---|
+| macOS, Linux | `brew install <owner>/tap/prtop` |
+| Windows | `choco install prtop` |
+| Anywhere with Python 3.14 or later | `uv tool install git+https://github.com/<owner>/prtop` |
 
-The watcher's first check only records a baseline — run a one-shot check and
-deal with pending items before starting it.
+Homebrew and Chocolatey install `glab` alongside prtop. On Windows, run prtop in
+Windows Terminal, the default terminal on Windows 11: the older console shows the
+emoji as boxes and cannot open links.
 
-`PR_MONITOR_STATE_FILE` overrides the state file path (both scripts honour
-it) — useful for testing against a scratch copy.
+Then point prtop at your instance, in `~/.config/prtop/.env`
+(`%APPDATA%\prtop\.env` on Windows):
 
-## What one run does
-
-The report is deliberately just **one table** — no activity-delta alerts, no
-prose suggestion sections, no status line. The leading mark column and the Status
-column are the whole picture.
-
-1. **Lists open MRs** assigned to the user in the `acme` group (incl. subgroups).
-2. **Hydrates each MR** with merge status, conflicts, approvals, comment count
-   (calls run in parallel across MRs).
-3. **Detects MRs merged since the last check** (by me, a teammate, or the
-   calling LLM) and adds them under `deployments`, pointed at the `main`
-   pipeline of their merge commit.
-4. **Prints one table** — `⟨mark⟩ | PR title | Task | PR | Status`, sorted so
-   rows needing action come first, then by task, repo and MR number, with a
-   separator rule between each severity block and between the two row groups.
-
-   The unlabelled first column is the severity mark, the primary status channel:
-   plain ASCII, so it survives any terminal, font size, or colour vision.
-
-   The PR cell (`repo!iid`) is a terminal hyperlink to the merge request
-   (cmd+click in iTerm2).
-
-   | Mark | Meaning | Examples |
-   |---|---|---|
-   | `!` | on me now | mergeable and approved, rebase needed, conflicts, my own threads left to resolve, awaiting prod trigger, failed pipeline |
-   | `?` | on me to look at or reply to | requested changes, a reviewer's unresolved threads, an unrecognised status |
-   | `~` | on someone else, until a person moves | not approved, draft, blocked by another MR |
-   | `.` | on a machine, resolves by itself | CI running, mergeability being computed, prod deploying |
-
-   The marks read as a weight gradient — `!` is the heaviest shape, `.` the
-   lightest — so the eye lands on the top of the table without resolving the
-   characters.
-
-   The Status column repeats the same state as a glyph plus a text label. Glyphs
-   are redundant garnish — every distinction is readable from the mark and the
-   label alone.
-
-   The two row groups:
-   - **open MRs first**, Status = review state in plain words, with the approval
-     state appended (`draft`, `awaiting review`, `rebase needed, unapproved`,
-     `mergeable, approved`, …);
-   - **merged-but-not-yet-deployed MRs at the bottom**, Status = deploy state
-     (awaiting prod trigger, prod deploying, prod deploy failed, pipeline
-     building/failed). A merged MR drops off — and out of tracking — once
-     production has been shipped at or after its merge commit: its own prod
-     deploy succeeding, **or** any later `main` pipeline shipping to prod (a newer
-     commit carries the earlier ones with it). See
-     `latest_prod_shipped_pipeline_id`. These rows are purely informational and
-     never affect the tab colour.
-5. **Sets the iTerm2 tab colour**, a convenience duplicate of the `!` block at
-   the top of the table. It tracks **only open-PR work** — a fully-approved
-   mergeable MR, a needed rebase, or conflicts. Deployment progress never flips
-   it, and nothing is ever reported by colour alone.
-   - **Orange** — something needs me on an open PR.
-   - **Green** — all clear.
-
-Long task names and PR titles are truncated (`TASK_MAX` / `TITLE_MAX`) so the
-table keeps a fixed width and never wraps in the terminal.
-
-## State file
-
-`~/.claude/pr-monitor-state.json`
-
-Keys are the `repo!iid` the table shows.
-
-```jsonc
-{
-  "open_mrs": {
-    "frontend!1904": {
-      "title": "...",
-      "task_name": "...",       // derived from the dev/<slug>-<hash> branch
-      "note_count": 3,
-      "state": "opened",
-      "approvals": ["carol7"],
-      "fully_approved": false,
-      "has_conflicts": false,
-      "merge_status": "not_approved",
-      "threads_await_user": true,  // false when every unresolved thread is mine alone
-      "project_path": "acme/web/frontend",
-      "iid": 1904,
-      "web_url": "https://gitlab.example.com/.../merge_requests/1904",
-      "last_checked": "2026-07-06T10:30:00+00:00"
-    }
-  },
-  "deployments": {
-    "portal-frontend!47": {
-      "title": "...",
-      "task_name": "...",
-      "project": "acme%2Fportal%2Fportal-frontend",
-      "project_path": "acme/portal/portal-frontend",
-      "iid": 47,
-      "web_url": "https://gitlab.example.com/.../merge_requests/47",
-      "pipeline_id": 12345,
-      "pipeline_status": "success",
-      "pipeline_url": "https://gitlab.example.com/.../pipelines/12345",
-      "prod_job_id": 67890
-    }
-  },
-  "last_checked": "2026-07-06T10:30:00+00:00"
-}
+```bash
+PRTOP_GITLAB_HOST=gitlab.example.com
 ```
 
-Safe to delete — the next run will recreate it with a fresh baseline.
+## Use
 
-## Notes & caveats
+```bash
+prtop
+```
 
-- On the very first run the previous state is empty, so nothing merged is
-  detected — it just records a baseline and prints the table.
-- `project_path`/`iid` in `open_mrs` are what allow a later run to recognise a
-  vanished MR as merged and start tracking its deployment. Entries written by
-  older versions lack them; those MRs are silently skipped for deploy tracking.
-- Because the report is table-only, the watcher wakes on anything visible in the
-  table — a Status change (approval-to-full, rebase needed, conflict, mergeable),
-  a merge, a new/removed MR, or deployment progress. It no longer wakes on a bare
-  new comment or a partial approval that doesn't move the Status label, since
-  those aren't shown. `note_count`/`approvals` are still recorded in the state
-  file for anything that wants finer-grained detection.
-- An unresolved thread I opened myself, with nobody else writing in it, is a
-  hint left for the reviewer rather than feedback waiting on me. Such an MR
-  reports as `awaiting review`, or as `resolve own threads` once it is approved
-  and those threads are the only thing GitLab still blocks the merge on. One
-  note from anyone else in the thread makes it `unresolved threads` again.
-- The script does **not** post Slack messages or open browsers; it just prints
-  to stdout and colours the iTerm tab.
+In a terminal, prtop takes the screen and fetches again every 30 seconds. The top
+line names the instance, the time of the last fetch and the countdown to the
+next one; the bottom line lists the keys.
+
+| Key | Does |
+|---|---|
+| `q`, F10, Ctrl+C | quit |
+| `h`, `?`, F1 | show or hide the help: the keys and what the marks mean |
+| Ctrl+L | fetch now |
+| `Z` | pause or resume fetching |
+
+| Option | Does |
+|---|---|
+| `-d SECONDS` | seconds between fetches (default 30) |
+| `-n N` | stop after N fetches and leave the last table in the terminal; `prtop -n 1` prints one table |
+| `--demo` | show made-up merge requests, without reading GitLab |
+
+When its output is not a terminal (a pipe, a file, a script, an AI agent), prtop
+prints the table once and exits. Errors go to stderr, so the output stays one
+table.
+
+## Reading the table
+
+```text
+|   | PR title                                   | Task                          | PR           | Status                             |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| ! | feat: sign in with SSO from the login page | PROJ-150 Single sign-on       | `web!1931`   | ✅ mergeable, approved             |
+| ! | chore(deps): align grpcio-status with pro… | —                             | `api!2549`   | 💥 conflicts, unapproved           |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| ? | feat: rate-limit the public search endpoi… | PROJ-147 Search rate limiting | `api!2551`   | ⛔ changes requested, unapproved   |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| ~ | Draft: feat: dark mode toggle in the sett… | PROJ-142 Dark mode            | `web!1922`   | 📝 draft                           |
+| ~ | fix(deps): bump idna for a security advis… | —                             | `api!2547`   | 👀 awaiting review                 |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| . | fix: retry webhook deliveries on a 502     | PROJ-138 Webhook retries      | `worker!812` | ⏳ CI running, approved            |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| ! | fix: right-to-left text in transactional … | PROJ-131 Right-to-left emails | `api!2544`   | 🚀 awaiting prod trigger           |
+|---|--------------------------------------------|-------------------------------|--------------|------------------------------------|
+| . | feat: export the audit log as CSV          | PROJ-129 Audit log export     | `web!1918`   | 📦 prod deploying                  |
+```
+
+The first column says whose move it is:
+
+| Mark | Means | For instance |
+|---|---|---|
+| `!` | on you now | approved and mergeable, rebase needed, conflicts, your own threads left to resolve, a failed pipeline, a production job awaiting its trigger |
+| `?` | on you to look at or reply to | changes requested, a reviewer's unresolved threads, a status prtop does not know |
+| `~` | on someone else, until a person moves | awaiting review, draft, blocked by another merge request |
+| `.` | on a machine; it resolves by itself | CI running, merge check running, production deploying |
+
+Open merge requests come first, merged ones on their way to production below
+them. Within each group, rows sort by mark, then by task, repository and number,
+and a rule separates one mark from the next.
+
+A state is never told by colour or emoji alone. The mark, the row's position and
+the words in the Status column each carry it; the emoji repeats it. The marks
+also read as a weight gradient, `!` the heaviest shape and `.` the lightest, so
+the eye lands on the top of the table first.
+
+In terminals that support hyperlinks, the PR cell opens the merge request, the
+Task cell opens the task, and `awaiting prod trigger` opens the page the
+production job is triggered from.
+
+In the live view, a row whose state changed shows in reverse video until the next
+fetch that changes something, and the top line gives the time of that change.
+
+When GitLab does not answer, one `! 🔌 instance unreachable` row stands in for the
+open merge requests rather than showing states the fetch could not confirm.
+
+## Following merges to production
+
+When a merge request leaves the open list merged, prtop finds the pipeline of its
+merge commit on the target branch and follows it:
+
+| Status | Mark |
+|---|---|
+| `⏳ pipeline running` (or pending, created…) | `.` |
+| `❌ pipeline failed` | `!` |
+| `🚀 awaiting prod trigger` | `!` |
+| `📦 prod deploying` | `.` |
+| `❌ prod deploy failed` | `!` |
+| `➖ prod <job status>` | `?` |
+| `🔌 check failed: <error>` | `?` |
+
+The row leaves the table once production runs its commit: when its own production
+job succeeded, or when a later pipeline on the same branch did, since a later
+deploy carries the earlier commits with it. A pipeline that finishes without any
+production job leaves the table too, having nothing to deploy.
+
+prtop tells production deploy jobs apart by name, with two settings:
+
+- `PRTOP_DEPLOY_JOB_PATTERN`, default `deploy.*prod|prod.*deploy`, matches every job
+  that deploys to production, and leaves out jobs such as `migrate_production` or
+  `test_production`.
+- `PRTOP_PRIMARY_DEPLOY_JOB_PATTERN`, default `^deploy[_-]production$`, picks among
+  those the job whose success means the app itself shipped, as opposed to side
+  services deployed beside it. When no job matches it, every production deploy
+  job counts.
+
+Both are regular expressions, matched without regard to case.
+`PRTOP_DEPLOY_TRACKING=off` turns the following off altogether.
+
+## Configuration
+
+Settings are `PRTOP_*` variables, read from the environment first and from the env
+file second. The env file holds `KEY=VALUE` lines; `#` starts a comment, and an
+empty value counts as unset. [`.env.example`](.env.example) lists every setting.
+
+| | macOS and Linux | Windows |
+|---|---|---|
+| Env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
+| State | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
+platform, and `PRTOP_CONFIG_FILE` / `PRTOP_STATE_FILE` name the files outright.
+
+| Setting | Default | |
+|---|---|---|
+| `PRTOP_GITLAB_HOST` | `gitlab.com` | The instance to read. |
+| `PRTOP_GITLAB_GROUP` | the whole instance | Only list merge requests in this group and its subgroups. |
+| `PRTOP_GITLAB_USERNAME` | read from the instance | Your username, to tell your own threads from a reviewer's. |
+| `PRTOP_TASK_SOURCE` | `none` | Where the Task column comes from: `none`, `issues`, `notion`, `jira` or `branch`. |
+| `PRTOP_TASK_BRANCH_PATTERN` | | The branch convention for `PRTOP_TASK_SOURCE=branch`. |
+| `PRTOP_TASK_URL` | | The task link, built from the pattern's groups. |
+| `PRTOP_DEPLOY_TRACKING` | `on` | Follow merged merge requests to production. |
+| `PRTOP_DEPLOY_JOB_PATTERN` | `deploy.*prod\|prod.*deploy` | Jobs that deploy to production. |
+| `PRTOP_PRIMARY_DEPLOY_JOB_PATTERN` | `^deploy[_-]production$` | The one among them that ships the app. |
+| `PRTOP_ITERM_TAB_COLOR` | `off` | In iTerm2, the live view colours the tab orange while an open merge request is on you, green otherwise. |
+| `PRTOP_CONFIG_FILE` | see above | The env file. |
+| `PRTOP_STATE_FILE` | see above | The state file. |
+
+A setting prtop does not know is reported on stderr and ignored, so a typo shows
+up rather than silently keeping a default.
+
+### The Task column
+
+With `PRTOP_TASK_SOURCE=none` the column is left out and the titles take its width.
+
+- `issues`: the issues the merge request closes (`Closes #123` in its description).
+- `notion`: a branch named after a Notion page,
+  `<prefix>/<ticket>-<title>-<32-hex page id>`, linked to the page.
+- `jira`: a branch carrying a Jira key, `<prefix>/PROJ-123-<title>`. Set
+  `PRTOP_TASK_URL=https://jira.example.com/browse/{id}` to link it.
+- `branch`: any branch convention, as a regular expression searched in the branch
+  name. A `task` group is the label; without one, the label is the `id` group
+  followed by the `title` group. Every group is available to `PRTOP_TASK_URL`:
+
+  ```bash
+  PRTOP_TASK_SOURCE=branch
+  PRTOP_TASK_BRANCH_PATTERN=(?P<id>\d+)-(?P<title>[^/]+)$
+  PRTOP_TASK_URL=https://tracker.example.com/tasks/{id}
+  ```
+
+### The state file
+
+The state file records the open merge requests of the last fetch, which is how the
+next fetch tells that one merged, and the merged ones still on their way to
+production. It is safe to delete: the next fetch starts a fresh baseline, and a
+merge request that merged in between is not followed to production.
+
+## With an AI agent
+
+An agent reads the one-table output: `prtop` run by an agent prints the table and
+exits, and the mark column is the state to act on. prtop never writes to GitLab,
+so merging, rebasing or triggering a deploy stays with the agent, behind your
+confirmation.
+
+`prtop watch` waits for something to happen, for an agent to run in the
+background and be woken by:
+
+- it checks every 5 minutes (`-d SECONDS`) and prints a `[watch] <time> no change`
+  line after each quiet check;
+- it exits 0 with the new table as soon as the table changes;
+- it exits 0 with a `TIMEOUT after <cap>s with no PR activity` line after
+  `--cap SECONDS` of quiet (2 hours by default);
+- it exits 1 with a `[watch] check failed` line when a check fails.
+
+[`examples/claude-code`](examples/claude-code) sets this up for Claude Code: a
+`/prs` command and the instructions for watching a merge request in the
+background.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for the rules
+the code holds to.
+
+## License
+
+[MIT](LICENSE)
