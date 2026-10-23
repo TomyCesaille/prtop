@@ -69,16 +69,6 @@ choco install prtop                    # Windows`;
     <figcaption>Try it: <code>prtop --demo</code></figcaption>
   </figure>
 
-  <figure class="demo section">
-    <img
-      src={`${base}/how-to-read-prtop.png`}
-      width="2469"
-      height="1841"
-      loading="lazy"
-      alt="How to read prtop. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them."
-    />
-  </figure>
-
   <section class="claude section">
     <h2>Made for Claude Code</h2>
     <p>Claude runs <code>prtop watch</code> in the background, and hears from it only when an MR moves.</p>
@@ -91,6 +81,19 @@ choco install prtop                    # Windows`;
     <h2>Install</h2>
     <pre><code>{install}</code></pre>
     <p>Then <code>glab auth login</code>, and <code>prtop</code>.</p>
+  </section>
+
+  <section class="howto section">
+    <h2>How to read prtop</h2>
+  <figure class="demo">
+    <img
+      src={`${base}/how-to-read-prtop.png`}
+      width="2469"
+      height="1841"
+      loading="lazy"
+      alt="prtop's live view, annotated. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them."
+    />
+  </figure>
   </section>
 
   <footer class="footer">
@@ -142,7 +145,8 @@ choco install prtop                    # Windows`;
   }
 
   .claude h2,
-  .install h2 {
+  .install h2,
+  .howto h2 {
     font-size: 20px;
     font-weight: 700;
     font-family: var(--font-mono);
