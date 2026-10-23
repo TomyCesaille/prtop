@@ -1,0 +1,52 @@
+name: Homebrew
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tap:
+    name: Homebrew tap
+    runs-on: macos-latest
+    environment:
+      name: homebrew
+      url: https://github.com/TomyCesaille/homebrew-tap/blob/main/Formula/prtop.rb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare the tap's formula with this release
+        id: versions
+        run: |
+          version=$(sed -nE 's/^__version__ = "(.+)"/\1/p' prtop/__init__.py)
+          brew tap TomyCesaille/tap
+          tapped=$(brew info --json=v2 TomyCesaille/tap/prtop | jq -r '.formulae[0].versions.stable')
+          echo "release=$version" >> "$GITHUB_OUTPUT"
+          echo "tapped=$tapped" >> "$GITHUB_OUTPUT"
+          echo "The tap serves prtop $tapped; this release is $version."
+      - name: Install it from the tap and run it
+        if: steps.versions.outputs.release == steps.versions.outputs.tapped
+        env:
+          RELEASE: ${{ steps.versions.outputs.release }}
+        run: |
+          brew install TomyCesaille/tap/prtop
+          test "$(prtop --version)" = "prtop $RELEASE"
+          prtop --demo
+      - name: Open the formula update in the tap
+        if: steps.versions.outputs.release != steps.versions.outputs.tapped
+        env:
+          RELEASE: ${{ steps.versions.outputs.release }}
+          # A token that can push branches and open pull requests in TomyCesaille/homebrew-tap.
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          url="https://github.com/TomyCesaille/prtop/archive/refs/tags/v$RELEASE.tar.gz"
+          sha=$(curl -sSfL "$url" | shasum -a 256 | cut -d' ' -f1)
+          brew bump-formula-pr --no-fork --no-browse --url "$url" --sha256 "$sha" TomyCesaille/tap/prtop
