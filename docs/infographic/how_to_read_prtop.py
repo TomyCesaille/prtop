@@ -109,11 +109,8 @@ CSS = """
   body { font-family: var(--sans); padding: 40px 44px 44px; background: #0f1115; color: #e8eaed; }
   /* prtop's output sets the width; everything else wraps under it. */
   .sheet { width: min-content; }
-  h1 { font-family: var(--mono); font-size: 30px; letter-spacing: -0.5px; white-space: nowrap; }
-  .lede { font-size: 17px; margin-top: 6px; color: #9aa0a6; }
-  .lede code { font-family: var(--mono); font-weight: 800; color: #e8eaed; background: #262b33; padding: 1px 6px; border-radius: 4px; }
   .term { position: relative; width: max-content; background: #000; color: #f2f2f2; border: 1px solid #3a3f47;
-          border-radius: 10px; padding: 14px 44px 14px 52px; font-family: var(--mono); font-size: 13px; margin-top: 26px; }
+          border-radius: 10px; padding: 14px 44px 14px 52px; font-family: var(--mono); font-size: 13px; }
   .ln { height: 20px; line-height: 20px; white-space: pre; width: max-content; }
   .ln.hl { background: #d9d9d9; color: #000; }
   .emo { display: inline-block; width: 2ch; font-size: 12px; }
@@ -184,10 +181,8 @@ def page() -> str:
         for i, (glyph, name, examples) in enumerate(MARKS)
     )
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>How to read prtop</title><style>{CSS}</style></head>
+<html lang="en"><head><meta charset="utf-8"><title>prtop, annotated</title><style>{CSS}</style></head>
 <body><main class="sheet">
-  <h1>How to read prtop</h1>
-  <p class="lede">The <code>!</code> marks are, regrettably, about you.</p>
   <div class="term">{output}{callouts}</div>
   <ol class="notes">{notes}</ol>
   <section class="marks">

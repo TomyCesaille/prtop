@@ -76,9 +76,9 @@ When its output is not a terminal (a pipe, a file, a script, an AI agent), prtop
 prints the table once and exits. Errors go to stderr, so the output stays one
 table.
 
-## Reading the table
+## How to read prtop
 
-![How to read prtop. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them.](docs/public/how-to-read-prtop.png)
+![prtop's live view, annotated. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them.](docs/public/how-to-read-prtop.png)
 
 ## Configuration
 
