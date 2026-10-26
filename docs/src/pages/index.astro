@@ -7,9 +7,7 @@ const base = import.meta.env.BASE_URL;
 const session = `> prtop watch                          # in the background
 [watch] 14:05:12 no change
 [watch] 14:10:12 no change
-| ! | feat: sign in with SSO… | web!1931 | ✅ mergeable, approved |
-
-⏺ web!1931 is approved and mergeable. Merge it? 🚀`;
+| ! | feat: sign in with SSO… | web!1931 | ✅ mergeable, approved |`;
 
 const setup = `Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md`;
 
@@ -104,8 +102,9 @@ PRTOP_GITLAB_HOST=gitlab.example.com`;
 
   <section class="claude section">
     <h2>Made for Claude Code</h2>
-    <p>Claude runs <code>prtop watch</code> in the background, and hears from it only when an MR moves.</p>
+    <p>Claude runs <code>prtop watch</code> in the background. It checks every 5 minutes and exits with the new table as soon as the table changes, so Claude hears about an approval, a needed rebase or a deploy as it happens.</p>
     <pre><code>{session}</code></pre>
+    <p>prtop never writes to GitLab or GitHub, so merging, rebasing or triggering a deploy stays with Claude, behind your confirmation.</p>
   </section>
 
   <footer class="footer">
