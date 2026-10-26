@@ -6,6 +6,10 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The live view's help names prtop's version.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

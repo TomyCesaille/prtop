@@ -8,7 +8,7 @@ from concurrent.futures import Future
 from contextlib import redirect_stderr
 from datetime import datetime, timedelta
 
-from prtop import live
+from prtop import __version__, live
 from prtop.live import REVERSE, Fetcher, Messages, fit
 from prtop.model import ForgeError
 from prtop.report import (
@@ -217,9 +217,10 @@ class LiveView(unittest.TestCase):
         self.run_view(keys=[(1, "q")])
         self.assertFalse(any(REVERSE in line for line in self.terminal.frames[-1]))
 
-    def test_h_shows_the_keys_and_the_marks_and_esc_brings_the_table_back(self):
+    def test_h_shows_the_version_the_keys_and_the_marks_and_esc_brings_the_table_back(self):
         self.run_view(keys=[(1, "h"), (2, "Esc"), (3, "q")])
         help_frame = next(f for f in self.terminal.frames if "  Ctrl+L           fetch now" in f)
+        self.assertIn(f"prtop {__version__}", help_frame)
         self.assertIn("  !   on you now", help_frame)
         self.assertIn("feat: change 1", "\n".join(self.last_frame()))
 

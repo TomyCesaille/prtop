@@ -69,7 +69,7 @@ the next one; the bottom line lists the keys.
 | Key | Does |
 |---|---|
 | `q`, F10, Ctrl+C | quit |
-| `h`, `?`, F1 | show or hide the help: the keys and what the marks mean |
+| `h`, `?`, F1 | show or hide the help: prtop's version, the keys and what the marks mean |
 | Ctrl+L | fetch now |
 | `Z` | pause or resume fetching |
 
