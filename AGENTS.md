@@ -142,8 +142,10 @@ Adding a state means choosing its mark first and its glyph last. The
   job and its auxiliaries can run in different workflows. Every page of the runs
   and of their jobs is read: a scheduled workflow runs on the default branch's
   latest commit again and again, burying the runs its push started. A workflow
-  run again on the commit supersedes its earlier runs, and each job counts by its
-  latest execution that did not skip it, so a failed deploy redone by hand reads
+  run again on the commit, re-runs included, supersedes its earlier runs in the
+  order their latest attempts started, while an earlier run still going keeps
+  the pipeline in flight. Each job counts by its latest run that did not skip
+  it, every job of that name in the run, so a failed deploy redone by hand reads
   as shipped.
   Run and job states are translated into `pipelines.py`'s words; `waiting`, a
   job held by a protected environment's reviewers, is a manual job, and the

@@ -569,6 +569,26 @@ class Deployments(unittest.TestCase):
                 jobs_of(5): jobs(job(status="waiting")), jobs_of(6): jobs(job(id=2))}
         self.assertEqual(self.state(rest).kind, model.AWAITING_TRIGGER)
 
+    def test_a_rerun_that_succeeded_after_a_later_run_failed_has_shipped(self):
+        rerun = {**run(5), "workflow_id": 1, "run_started_at": "2026-10-23T18:10:00Z"}
+        failed = {**run(6, conclusion="failure"), "workflow_id": 1, "run_started_at": "2026-10-23T18:05:00Z"}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(failed, rerun),
+                jobs_of(5): jobs(job()), jobs_of(6): jobs(job(conclusion="failure", id=2))}
+        self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_two_jobs_of_one_run_with_the_same_name_both_count(self):
+        rest = {RECENT_RUNS: listing(), **self.own(job(status="waiting", id=2), job(), status="waiting", conclusion=None)}
+        self.assertEqual(self.state(rest).kind, model.AWAITING_TRIGGER)
+
+    def test_an_earlier_run_still_waiting_keeps_the_merge_tracked_after_a_later_one_completed(self):
+        held = {**run(5, status="waiting", conclusion=None), "workflow_id": 1, "run_started_at": "2026-10-23T18:00:00Z"}
+        later = {**run(6), "workflow_id": 1, "run_started_at": "2026-10-23T18:05:00Z",
+                 "updated_at": "2026-10-23T18:06:00Z"}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(later, held),
+                jobs_of(5): jobs(job("deploy-staging", status="waiting")), jobs_of(6): jobs(job("test", id=2))}
+        forge = FakeGitHub(rest, now=lambda: datetime(2026, 10, 24, 18, 0, tzinfo=UTC))
+        self.assertEqual(self.state({}, forge), model.DeployState(model.PIPELINE_RUNNING, "waiting"))
+
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)
         finished["updated_at"] = "2026-10-23T18:00:00Z"
