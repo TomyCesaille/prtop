@@ -14,9 +14,12 @@
     <licenseUrl>https://github.com/TomyCesaille/prtop/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <releaseNotes>https://github.com/TomyCesaille/prtop/blob/v{version}/CHANGELOG.md</releaseNotes>
-    <tags>gitlab github merge-requests pull-requests code-review terminal cli htop</tags>
-    <summary>Your merge requests and pull requests, from review to production, in one terminal table that refreshes in place, like htop.</summary>
+    <iconUrl>https://cdn.jsdelivr.net/gh/TomyCesaille/prtop@v{version}/docs/public/favicon.svg</iconUrl>
+    <tags>gitlab github merge-requests pull-requests code-review terminal cli htop claude-code</tags>
+    <summary>Your merge requests and pull requests, from review to production, in one terminal table that refreshes in place, like htop. Built to wake Claude Code.</summary>
     <description><![CDATA[prtop shows your GitLab merge requests and GitHub pull requests in one terminal table that refreshes in place, the way htop shows processes. Each row is marked with whose move it is: `!` on you now, `?` on you to look at, `~` on someone else, `.` on a machine. Once a merge request merges, prtop follows its pipeline to production and drops the row when production runs it.
+
+Built to wake Claude Code: `prtop watch` runs in the background and exits the moment the table changes, so an agent hears about an approval, a needed rebase or a deploy as it happens.
 
 prtop reads GitLab through the `glab` CLI and GitHub through the `gh` CLI, which this package installs, and never writes to either. Sign in to the ones you use, tell prtop what to read, and run it:
 
