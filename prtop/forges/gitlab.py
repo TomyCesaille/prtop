@@ -90,8 +90,7 @@ class GitLab:
     def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
         scope = f"groups/{quote(self.group, safe='')}/" if self.group else ""
         # An MR in an archived project can no longer be acted on.
-        query = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100"
-        summaries = self.api(f"{scope}merge_requests?{query}")
+        summaries = self._pages(f"{scope}merge_requests?scope=assigned_to_me&state=opened&non_archived=true")
         if not summaries:
             return {}
         with ThreadPoolExecutor(max_workers=min(8, len(summaries))) as pool:
@@ -114,9 +113,11 @@ class GitLab:
             detailed = "need_rebase"
         threads_await_user = True
         # The extra calls earn their place only when threads are what blocks the merge.
+        # A bot-reviewed MR runs past a page of discussions, and a single reviewer
+        # thread anywhere in them decides the status.
         if detailed == "discussions_not_resolved":
             threads_await_user = unresolved_threads_await_user(
-                self._discussions(base), self.username()
+                self._pages(f"{base}/discussions"), self.username()
             )
 
         task = tasks.resolve(full.get("source_branch"), lambda: self._closing_issues(base))
@@ -137,12 +138,12 @@ class GitLab:
             "last_checked": datetime.now(UTC).isoformat(),
         }
 
-    def _discussions(self, base: str) -> list[dict]:
-        """Every discussion on the MR, up to ten pages — a bot-reviewed MR runs
-        past one, and a single reviewer thread anywhere in them decides the status."""
+    def _pages(self, path: str) -> list[dict]:
+        """Every item of a listing, up to ten pages of a hundred."""
+        separator = "&" if "?" in path else "?"
         out: list[dict] = []
         for page in range(1, 11):
-            batch = self.api(f"{base}/discussions?per_page=100&page={page}") or []
+            batch = self.api(f"{path}{separator}per_page=100&page={page}") or []
             out.extend(batch)
             if len(batch) < 100:
                 break

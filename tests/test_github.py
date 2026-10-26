@@ -31,10 +31,11 @@ COMPARE = f"repos/{REPO}/compare/abc...def?per_page=1"
 
 
 def pull_request(
-    number=7, *, merge_state="BLOCKED", decision="REVIEW_REQUIRED", checks="SUCCESS", threads=(), **fields
+    number=7, *, merge_state="BLOCKED", decision="REVIEW_REQUIRED", checks="SUCCESS", threads=(),
+    more_threads=False, **fields
 ):
     """An open pull request as the listing query returns it. `threads` holds
-    each review thread's resolution."""
+    each review thread's resolution, and `more_threads` says the list runs past it."""
     return {
         "id": f"PR_{number}",
         "number": number,
@@ -47,15 +48,30 @@ def pull_request(
         "mergeable": "MERGEABLE",
         "mergeStateStatus": merge_state,
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks} if checks else None}}]},
-        "reviewThreads": {"nodes": [{"isResolved": resolved} for resolved in threads]},
+        "reviewThreads": {
+            "pageInfo": {"hasNextPage": more_threads},
+            "nodes": [{"isResolved": resolved} for resolved in threads],
+        },
         "closingIssuesReferences": {"nodes": []},
         **fields,
     }
 
 
-def thread(*authors, resolved=False):
+def thread(*authors, resolved=False, more_comments=False):
     """A review thread, commented on by `authors` in order."""
-    return {"isResolved": resolved, "comments": {"nodes": [{"author": {"login": a}} for a in authors]}}
+    return {
+        "isResolved": resolved,
+        "comments": {"pageInfo": {"hasNextPage": more_comments}, "nodes": [{"author": {"login": a}} for a in authors]},
+    }
+
+
+def page_of(items, variables, size=100):
+    """One page of `items`, cursor-paginated the way GitHub's GraphQL connections are."""
+    start = int(variables.get("after", 0))
+    return {
+        "pageInfo": {"hasNextPage": start + size < len(items), "endCursor": str(start + size)},
+        "nodes": items[start:start + size],
+    }
 
 
 def runs_for(sha, count=100):
@@ -111,15 +127,16 @@ class FakeGitHub(GitHub):
     def query(self, document, **variables):
         self.queries.append(variables)
         if document == OPEN_PULL_REQUESTS:
-            return {
-                "viewer": {"login": ME},
-                "authored": {"nodes": [pr and {"id": pr["id"]} for pr in self.authored]},
-                "assigned": {"nodes": [pr and {"id": pr["id"]} for pr in self.assigned]},
-            }
+            found = self.authored if variables["search"].endswith("author:@me") else self.assigned
+            return {"viewer": {"login": ME}, "search": page_of([pr and {"id": pr["id"]} for pr in found], variables)}
         if document == PULL_REQUESTS:
             known = {pr["id"]: pr for pr in [*self.authored, *self.assigned] if pr and pr["id"] not in self.hidden}
             return {"nodes": [known.get(id) for id in variables["ids"]]}
-        return {"repository": {"pullRequest": {"reviewThreads": {"nodes": self.threads[variables["number"]]}}}}
+        threads = page_of(self.threads[variables["number"]], variables)
+        return {"repository": {"pullRequest": {"reviewThreads": threads}}}
+
+    def asked(self, key):
+        return [q for q in self.queries if key in q]
 
 
 def state_of(pr, threads=()):
@@ -137,21 +154,21 @@ def never_asked():
 
 class ReviewStates(unittest.TestCase):
     def test_a_draft_is_a_draft_whatever_else_github_says(self):
-        self.assertEqual(review_state(pull_request(isDraft=True, merge_state="DRAFT"), never_asked)[0], model.DRAFT)
+        self.assertEqual(review_state(pull_request(isDraft=True, merge_state="DRAFT"), never_asked, ME)[0], model.DRAFT)
 
     def test_a_branch_that_conflicts_with_its_base_has_conflicts(self):
         self.assertEqual(state_of(pull_request(mergeable="CONFLICTING", merge_state="DIRTY")),
                          (model.CONFLICTS, "💥 conflicts, unapproved"))
 
     def test_conflicts_github_reports_only_through_the_merge_state_still_count(self):
-        self.assertEqual(review_state(pull_request(merge_state="DIRTY"), never_asked)[0], model.CONFLICTS)
+        self.assertEqual(review_state(pull_request(merge_state="DIRTY"), never_asked, ME)[0], model.CONFLICTS)
 
     def test_requested_changes_wait_on_your_answer(self):
         pr = pull_request(decision="CHANGES_REQUESTED", merge_state="BEHIND")
         self.assertEqual(state_of(pr), (model.CHANGES_REQUESTED, "⛔ changes requested, unapproved"))
 
     def test_a_branch_behind_its_base_needs_a_rebase_even_in_review(self):
-        self.assertEqual(review_state(pull_request(merge_state="BEHIND"), never_asked)[0], model.REBASE_NEEDED)
+        self.assertEqual(review_state(pull_request(merge_state="BEHIND"), never_asked, ME)[0], model.REBASE_NEEDED)
 
     def test_an_approved_pull_request_github_would_merge_is_on_you(self):
         pr = pull_request(decision="APPROVED", merge_state="CLEAN")
@@ -159,7 +176,7 @@ class ReviewStates(unittest.TestCase):
 
     def test_failing_checks_the_branch_does_not_require_leave_it_mergeable(self):
         pr = pull_request(decision="APPROVED", merge_state="UNSTABLE", checks="FAILURE")
-        self.assertEqual(review_state(pr, never_asked)[0], model.MERGEABLE)
+        self.assertEqual(review_state(pr, never_asked, ME)[0], model.MERGEABLE)
 
     def test_a_repository_that_requires_no_review_counts_the_pull_request_approved(self):
         self.assertEqual(state_of(pull_request(decision=None, merge_state="HAS_HOOKS"))[1], "✅ mergeable, approved")
@@ -178,14 +195,14 @@ class ReviewStates(unittest.TestCase):
 
     def test_unresolved_threads_do_not_hide_a_pull_request_github_would_merge(self):
         pr = pull_request(decision="APPROVED", merge_state="CLEAN", threads=[False])
-        self.assertEqual(review_state(pr, never_asked)[0], model.MERGEABLE)
+        self.assertEqual(review_state(pr, never_asked, ME)[0], model.MERGEABLE)
 
     def test_a_merge_state_github_is_still_computing_is_a_pending_merge_check(self):
-        self.assertEqual(review_state(pull_request(merge_state="UNKNOWN"), never_asked)[0], model.MERGE_CHECK_PENDING)
-        self.assertEqual(review_state(pull_request(merge_state=None), never_asked)[0], model.MERGE_CHECK_PENDING)
+        self.assertEqual(review_state(pull_request(merge_state="UNKNOWN"), never_asked, ME)[0], model.MERGE_CHECK_PENDING)
+        self.assertEqual(review_state(pull_request(merge_state=None), never_asked, ME)[0], model.MERGE_CHECK_PENDING)
 
     def test_a_merge_state_github_adds_later_passes_through_raw(self):
-        self.assertEqual(review_state(pull_request(merge_state="QUEUED_SOMEHOW"), never_asked)[0], "queued_somehow")
+        self.assertEqual(review_state(pull_request(merge_state="QUEUED_SOMEHOW"), never_asked, ME)[0], "queued_somehow")
 
     def test_every_merge_state_maps_to_a_state_the_report_knows(self):
         self.assertLessEqual(set(MERGE_STATE.values()), set(REVIEW_SIGNAL) | {model.MERGEABLE})
@@ -215,18 +232,27 @@ class BlockedPullRequests(unittest.TestCase):
 
     def test_failing_required_checks_must_pass(self):
         pr = pull_request(decision="APPROVED", checks="ERROR")
-        self.assertEqual(review_state(pr, never_asked)[0], model.CI_MUST_PASS)
+        self.assertEqual(review_state(pr, never_asked, ME)[0], model.CI_MUST_PASS)
 
     def test_a_reviewers_thread_outranks_the_checks(self):
         pr = pull_request(decision="APPROVED", checks="FAILURE", threads=[False])
-        self.assertEqual(review_state(pr, lambda: True), (model.UNRESOLVED_THREADS, True))
+        self.assertEqual(review_state(pr, lambda: [thread("alice")], ME), (model.UNRESOLVED_THREADS, True))
 
     def test_a_block_with_nothing_to_explain_it_says_blocked(self):
         pr = pull_request(decision="APPROVED", checks=None)
         self.assertEqual(state_of(pr), (model.BLOCKED, "🚧 blocked, approved"))
 
+    def test_an_unresolved_thread_past_the_first_hundred_still_counts(self):
+        pr = pull_request(threads=[True] * 100, more_threads=True)
+        everything = [thread("bob", resolved=True)] * 120 + [thread("alice")]
+        self.assertEqual(state_of(pr, everything)[0], model.UNRESOLVED_THREADS)
+
+    def test_a_hundred_resolved_threads_and_more_resolved_ones_leave_it_with_the_reviewers(self):
+        pr = pull_request(threads=[True] * 100, more_threads=True)
+        self.assertEqual(state_of(pr, [thread("bob", resolved=True)] * 130)[0], model.AWAITING_REVIEW)
+
     def test_without_unresolved_threads_nobody_is_asked_who_wrote_them(self):
-        self.assertEqual(review_state(pull_request(threads=[True]), never_asked)[0], model.AWAITING_REVIEW)
+        self.assertEqual(review_state(pull_request(threads=[True]), never_asked, ME)[0], model.AWAITING_REVIEW)
 
 
 class ThreadAuthors(unittest.TestCase):
@@ -238,6 +264,9 @@ class ThreadAuthors(unittest.TestCase):
 
     def test_a_resolved_reviewer_thread_is_behind_you(self):
         self.assertFalse(unresolved_threads_await_user([thread("alice", resolved=True)], ME))
+
+    def test_a_thread_whose_comments_run_past_a_page_is_more_than_your_own_hint(self):
+        self.assertTrue(unresolved_threads_await_user([thread(ME, more_comments=True)], ME))
 
     def test_a_comment_from_a_deleted_account_is_someone_elses(self):
         deleted = {"isResolved": False, "comments": {"nodes": [{"author": None}]}}
@@ -253,30 +282,35 @@ class OpenPullRequests(unittest.TestCase):
     def test_the_pull_requests_you_opened_and_the_ones_assigned_to_you_are_listed(self):
         forge = FakeGitHub(authored=[pull_request(7)], assigned=[pull_request(8)])
         self.assertEqual(set(forge.open_merge_requests(NoTasks())), {"web!7", "web!8"})
-        self.assertEqual(forge.queries[0], {
-            "authored": "is:pr is:open archived:false author:@me",
-            "assigned": "is:pr is:open archived:false assignee:@me",
+        self.assertEqual({q["search"] for q in forge.asked("search")}, {
+            "is:pr is:open archived:false author:@me",
+            "is:pr is:open archived:false assignee:@me",
         })
 
     def test_a_pull_request_you_opened_and_are_assigned_to_is_read_once(self):
         forge = FakeGitHub(authored=[pull_request(7)], assigned=[pull_request(7)])
         self.assertEqual(list(forge.open_merge_requests(NoTasks())), ["web!7"])
-        self.assertEqual(forge.queries[1], {"ids": ["PR_7"]})
+        self.assertEqual(forge.asked("ids"), [{"ids": ["PR_7"]}])
 
     def test_a_long_list_is_read_in_batches_github_answers_in_time(self):
         forge = FakeGitHub(authored=[pull_request(n) for n in range(45)])
         self.assertEqual(len(forge.open_merge_requests(NoTasks())), 45)
-        self.assertEqual(sorted(len(q["ids"]) for q in forge.queries[1:]), [5, 20, 20])
+        self.assertEqual(sorted(len(q["ids"]) for q in forge.asked("ids")), [5, 20, 20])
+
+    def test_more_than_a_hundred_open_pull_requests_are_all_listed(self):
+        forge = FakeGitHub(authored=[pull_request(n) for n in range(150)], assigned=[pull_request(150)])
+        self.assertEqual(len(forge.open_merge_requests(NoTasks())), 151)
+        self.assertEqual(sorted(q.get("after", "") for q in forge.asked("search")), ["", "", "100"])
 
     def test_an_owner_limits_both_searches_to_its_repositories(self):
         forge = FakeGitHub(github_owner="acme")
         forge.open_merge_requests(NoTasks())
-        self.assertTrue(all(q.endswith("@me") and " user:acme " in q for q in forge.queries[0].values()))
+        self.assertTrue(all(" user:acme " in q["search"] for q in forge.asked("search")))
 
     def test_with_nothing_open_nothing_more_is_asked(self):
         forge = FakeGitHub()
         self.assertEqual(forge.open_merge_requests(NoTasks()), {})
-        self.assertEqual(len(forge.queries), 1)
+        self.assertEqual(len(forge.queries), 2)
 
     def test_a_pull_request_an_error_left_unreadable_is_skipped(self):
         forge = FakeGitHub(authored=[None, pull_request(7), pull_request(8)], hidden={"PR_8"})
@@ -291,7 +325,7 @@ class OpenPullRequests(unittest.TestCase):
     def test_threads_are_asked_for_by_repository_and_number(self):
         forge = FakeGitHub(authored=[pull_request(threads=[False])], threads={7: [thread(ME)]})
         forge.open_merge_requests(NoTasks())
-        self.assertEqual(forge.queries[2], {"owner": "acme", "name": "web", "number": 7})
+        self.assertEqual(forge.asked("owner"), [{"owner": "acme", "name": "web", "number": 7}])
 
     def test_an_issue_the_pull_request_closes_is_its_task(self):
         issue = {"number": 12, "title": "Login fails", "url": "https://github.com/acme/web/issues/12"}

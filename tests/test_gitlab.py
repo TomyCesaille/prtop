@@ -22,7 +22,7 @@ ENCODED = "acme%2Fweb%2Ffrontend"
 MR = f"projects/{ENCODED}/merge_requests/7"
 MR_DETAIL = f"{MR}?include_diverged_commits_count=true"
 ME = "john.doe"
-QUERY = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100"
+QUERY = "scope=assigned_to_me&state=opened&non_archived=true&per_page=100&page=1"
 LIST_ALL = f"merge_requests?{QUERY}"
 
 
@@ -180,6 +180,12 @@ class OpenMergeRequests(unittest.TestCase):
         responses[f"{MR}/discussions?per_page=100&page=2"] = [thread("alice.martin")]
         entry = FakeGitLab(responses, gitlab_username=ME).open_merge_requests(NoTasks())["frontend!7"]
         self.assertTrue(entry["threads_await_user"])
+
+    def test_more_than_a_hundred_open_mrs_are_all_listed(self):
+        mrs = [{"iid": n, "references": {"full": f"acme/repo{n}!{n}"}} for n in range(130)]
+        forge = FakeGitLab({LIST_ALL: mrs[:100], LIST_ALL.removesuffix("&page=1") + "&page=2": mrs[100:]})
+        forge._hydrate = lambda summary, tasks: (summary["references"]["full"].split("!")[0], summary["iid"], {})
+        self.assertEqual(len(forge.open_merge_requests(NoTasks())), 130)
 
     def test_discussions_are_read_ten_pages_deep_at_most(self):
         responses = open_mr("discussions_not_resolved")

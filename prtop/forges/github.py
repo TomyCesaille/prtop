@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from urllib.parse import quote
 
 from prtop import model
@@ -32,19 +33,23 @@ from prtop.tasks import Issue, TaskSource
 HOST = "github.com"
 GH_URL = "https://cli.github.com"
 
-# Your open pull requests: the ones you opened and the ones assigned to you.
+# Your open pull requests, one search for the ones you opened and one for the
+# ones assigned to you, a page of a hundred at a time.
 OPEN_PULL_REQUESTS = """
-query($authored: String!, $assigned: String!) {
+query($search: String!, $after: String) {
   viewer { login }
-  authored: search(query: $authored, type: ISSUE, first: 100) { nodes { ... on PullRequest { id } } }
-  assigned: search(query: $assigned, type: ISSUE, first: 100) { nodes { ... on PullRequest { id } } }
+  search(query: $search, type: ISSUE, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { id } }
+  }
 }
 """
 
 # Their state, a batch at a time: GitHub works out each one's merge state as it
 # answers, and a query that runs past ten seconds fails whole. Review threads
-# come with their resolution only; who wrote in them is asked for one pull
-# request at a time, and only when it decides the state.
+# come with the resolution of the first hundred only; the rest, and who wrote in
+# them, are asked for one pull request at a time, and only when they decide the
+# state.
 PULL_REQUESTS = """
 query($ids: [ID!]!) {
   nodes(ids: $ids) {
@@ -53,7 +58,7 @@ query($ids: [ID!]!) {
       repository { nameWithOwner viewerPermission }
       reviewDecision mergeable mergeStateStatus
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-      reviewThreads(first: 100) { nodes { isResolved } }
+      reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } }
       closingIssuesReferences(first: 10) { nodes { number title url } }
     }
   }
@@ -62,11 +67,12 @@ query($ids: [ID!]!) {
 BATCH = 20
 
 REVIEW_THREADS = """
-query($owner: String!, $name: String!, $number: Int!) {
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
-        nodes { isResolved comments(first: 100) { nodes { author { login } } } }
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { isResolved comments(first: 100) { pageInfo { hasNextPage } nodes { author { login } } } }
       }
     }
   }
@@ -117,7 +123,7 @@ def can_merge(pr: dict) -> bool:
     return (pr.get("repository") or {}).get("viewerPermission") in MERGERS
 
 
-def review_state(pr: dict, threads_await_user: Callable[[], bool]) -> tuple[str, bool]:
+def review_state(pr: dict, threads: Callable[[], list[dict]], login: str) -> tuple[str, bool]:
     """GitHub's view of an open pull request as a review state of `prtop.model`,
     with whether its unresolved threads wait on you.
 
@@ -125,7 +131,8 @@ def review_state(pr: dict, threads_await_user: Callable[[], bool]) -> tuple[str,
     only reports them when its project requires them resolved. GitHub does not
     say what blocks it, so the likeliest blocker is named: a reviewer's thread,
     then a missing review, then checks, then threads only you wrote in.
-    `threads_await_user` asks the forge, so it is only called when it decides.
+    `threads` asks the forge for every thread and who wrote in it, so it is only
+    called when they decide.
     """
     merge_state = pr.get("mergeStateStatus") or "UNKNOWN"
     decision = pr.get("reviewDecision")
@@ -145,7 +152,9 @@ def review_state(pr: dict, threads_await_user: Callable[[], bool]) -> tuple[str,
         return merge_state.lower(), True
 
     unresolved = any(not thread.get("isResolved") for thread in nodes(pr, "reviewThreads"))
-    if unresolved and threads_await_user():
+    if not unresolved and ((pr.get("reviewThreads") or {}).get("pageInfo") or {}).get("hasNextPage"):
+        unresolved = any(not thread.get("isResolved") for thread in threads())
+    if unresolved and unresolved_threads_await_user(threads(), login):
         return model.UNRESOLVED_THREADS, True
     if decision == "REVIEW_REQUIRED":
         return model.AWAITING_REVIEW, True
@@ -161,10 +170,15 @@ def review_state(pr: dict, threads_await_user: Callable[[], bool]) -> tuple[str,
 
 
 def unresolved_threads_await_user(threads: list[dict], login: str) -> bool:
-    """Whether an unresolved thread carries a comment from anyone but you."""
+    """Whether an unresolved thread carries a comment from anyone but you. One
+    whose comments run past a page counts: no hint left for a reviewer runs to
+    a hundred comments."""
     return any(
         not thread.get("isResolved")
-        and any((comment.get("author") or {}).get("login") != login for comment in nodes(thread, "comments"))
+        and (
+            bool(((thread.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage"))
+            or any((comment.get("author") or {}).get("login") != login for comment in nodes(thread, "comments"))
+        )
         for thread in threads
     )
 
@@ -238,20 +252,36 @@ class GitHub:
             print(f"prtop: {HOST}: {error.get('message', error)}", file=sys.stderr)
         return payload["data"]
 
+    def _every_page(
+        self, document: str, connection: Callable[[dict], dict | None], **variables: str | int
+    ) -> tuple[dict, list[dict]]:
+        """The nodes of a connection across all its pages, and the last page's data."""
+        found: list[dict] = []
+        after: dict[str, str] = {}
+        while True:
+            data = self.query(document, **variables, **after)
+            page = connection(data) or {}
+            found += [node for node in page.get("nodes") or [] if node]
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                return data, found
+            after = {"after": info["endCursor"]}
+
     # ---------- Open pull requests ----------
 
     def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
         scope = f"is:pr is:open archived:false{f' user:{self.owner}' if self.owner else ''}"
-        data = self.query(
-            OPEN_PULL_REQUESTS, authored=f"{scope} author:@me", assigned=f"{scope} assignee:@me"
-        )
-        login = (data.get("viewer") or {}).get("login", "")
-        # One you opened and is assigned to you comes back from both searches.
-        ids = list(dict.fromkeys(pr["id"] for pr in [*nodes(data, "authored"), *nodes(data, "assigned")]))
-        if not ids:
-            return {}
-        batches = [ids[i:i + BATCH] for i in range(0, len(ids), BATCH)]
         with ThreadPoolExecutor(max_workers=8) as pool:
+            (data, authored), (_, assigned) = pool.map(
+                lambda search: self._every_page(OPEN_PULL_REQUESTS, lambda d: d.get("search"), search=search),
+                (f"{scope} author:@me", f"{scope} assignee:@me"),
+            )
+            login = (data.get("viewer") or {}).get("login", "")
+            # One you opened and is assigned to you comes back from both searches.
+            ids = list(dict.fromkeys(pr["id"] for pr in [*authored, *assigned]))
+            if not ids:
+                return {}
+            batches = [ids[i:i + BATCH] for i in range(0, len(ids), BATCH)]
             prs = [pr for batch in pool.map(self._pull_requests, batches) for pr in batch]
             return keyed_by_short_id(pool.map(lambda pr: self._entry(pr, login, tasks), prs))
 
@@ -261,9 +291,7 @@ class GitHub:
     def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, int, dict]:
         repo = pr["repository"]["nameWithOwner"]
         number = pr["number"]
-        status, threads_await_user = review_state(
-            pr, lambda: unresolved_threads_await_user(self._threads(repo, number), login)
-        )
+        status, threads_await_user = review_state(pr, cache(lambda: self._threads(repo, number)), login)
         issues = [
             Issue(f"#{i['number']}", i.get("title", ""), i.get("url"))
             for i in nodes(pr, "closingIssuesReferences")
@@ -289,8 +317,11 @@ class GitHub:
 
     def _threads(self, repo: str, number: int) -> list[dict]:
         owner, name = repo.split("/", 1)
-        data = self.query(REVIEW_THREADS, owner=owner, name=name, number=number)
-        return nodes((data.get("repository") or {}).get("pullRequest"), "reviewThreads")
+        return self._every_page(
+            REVIEW_THREADS,
+            lambda data: ((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads"),
+            owner=owner, name=name, number=number,
+        )[1]
 
     # ---------- Merges ----------
 
