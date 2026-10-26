@@ -13,7 +13,7 @@ production, live in your terminal. Built to wake Claude Code.
 
 [Website](https://tomycesaille.github.io/prtop/) | [Claude Code setup](examples/claude-code)
 
-## Install with Claude Code
+## Install with Claude Code, for Claude Code
 
 Paste this into Claude Code:
 
@@ -21,9 +21,10 @@ Paste this into Claude Code:
 Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md
 ```
 
-It installs prtop, checks your GitLab or GitHub sign-in and fits the settings to
-your projects. It also sets up the Claude Code integration: a `/prs` command, and
-watching your merge requests in the background. It asks you at each step.
+Claude installs prtop for you and for itself. It checks your GitLab or GitHub
+sign-in and fits the settings to your projects, then sets itself up to use prtop:
+a `/prs` command, and watching your merge requests in the background while it
+works. It asks you at each step.
 
 ## Install manually
 

@@ -7,9 +7,7 @@ const base = import.meta.env.BASE_URL;
 const session = `> prtop watch                          # in the background
 [watch] 14:05:12 no change
 [watch] 14:10:12 no change
-| ! | feat: sign in with SSO… | web!1931 | ✅ mergeable, approved |
-
-⏺ web!1931 is approved and mergeable. Merge it? 🚀`;
+| ! | feat: sign in with SSO… | web!1931 | ✅ mergeable, approved |`;
 
 const setup = `Set up prtop for me: follow https://raw.githubusercontent.com/TomyCesaille/prtop/main/examples/claude-code/SETUP.md`;
 
@@ -74,18 +72,17 @@ PRTOP_GITLAB_HOST=gitlab.example.com`;
     <figcaption>Try it: <code>prtop --demo</code></figcaption>
   </figure>
 
-  <section class="claude section">
-    <h2>Made for Claude Code</h2>
-    <p>Claude runs <code>prtop watch</code> in the background, and hears from it only when an MR moves.</p>
-    <pre><code>{session}</code></pre>
-    <p>To set it up, paste this into Claude Code:</p>
+  <section class="install section">
+    <h2>Install with Claude Code, for Claude Code</h2>
+    <p>Paste this into Claude Code:</p>
     <pre><code>{setup}</code></pre>
+    <p>Claude installs prtop for you and for itself. It checks your GitLab or GitHub sign-in and fits the settings to your projects, then sets itself up to use prtop: a <code>/prs</code> command, and watching your merge requests in the background while it works. It asks you at each step.</p>
   </section>
 
   <section class="install section">
-    <h2>Install</h2>
+    <h2>Install manually</h2>
     <pre><code>{install}</code></pre>
-    <p>Sign in with <code>glab auth login</code>, <code>gh auth login</code> or both, and name what prtop reads:</p>
+    <p>Both install <code>glab</code> and <code>gh</code> alongside prtop. Sign in to the ones you use, with <code>glab auth login</code> or <code>gh auth login</code>, and name what prtop reads:</p>
     <pre><code>{configure}</code></pre>
     <p>Then run <code>prtop</code>.</p>
   </section>
@@ -101,6 +98,13 @@ PRTOP_GITLAB_HOST=gitlab.example.com`;
       alt="prtop's live view, annotated. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them."
     />
   </figure>
+  </section>
+
+  <section class="claude section">
+    <h2>Made for Claude Code</h2>
+    <p>Claude runs <code>prtop watch</code> in the background. It checks every 5 minutes and exits with the new table as soon as the table changes, so Claude hears about an approval, a needed rebase or a deploy as it happens.</p>
+    <pre><code>{session}</code></pre>
+    <p>prtop never writes to GitLab or GitHub, so merging, rebasing or triggering a deploy stays with Claude, behind your confirmation.</p>
   </section>
 
   <footer class="footer">
