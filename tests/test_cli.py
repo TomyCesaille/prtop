@@ -249,6 +249,24 @@ class SeveralForges(unittest.TestCase):
         self.assertTrue(report.action_needed)
         self.assertIn("prtop: github.com: connection refused", stderr.getvalue())
 
+    def test_watch_sees_two_forges_identical_ids_trade_states(self):
+        ready, waiting = entry(1, model.MERGEABLE, approved=True, title="feat: same"), entry(1, title="feat: same")
+        on_github = {"web_url": "https://github.com/acme/web/pull/1"}
+        self.gitlab.open, self.github.open = {"web!1": ready}, {"web!1": waiting | on_github}
+        clock = [0.0]
+
+        def trade(seconds):
+            clock[0] += seconds
+            self.gitlab.open, self.github.open = {"web!1": waiting}, {"web!1": ready | on_github}
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = watch(self.config, [self.gitlab, self.github], NoTasks(), 300, 900,
+                         sleep=trade, clock=lambda: clock[0])
+        self.assertEqual(code, 0)
+        self.assertNotIn("TIMEOUT", out.getvalue())
+        self.assertEqual(out.getvalue().count("no change"), 1)
+
     def test_a_merge_is_asked_of_the_forge_it_happened_on(self):
         self.github.open = {"cli!2": entry(2, title="feat: merged on github")}
         self.check()

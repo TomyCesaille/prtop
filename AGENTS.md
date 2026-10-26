@@ -30,7 +30,7 @@ tools, one per forge.
 - **Every forge reads the same in the table.** A pull request is `repo!number`
   like a merge request, with the same states and marks; the link on the cell says
   where it lives. Each forge keeps its own state file, `<host>.json`, and the live
-  view tells two forges' identical ids apart by that link. Two repositories of
+  view and `prtop watch` tell two forges' identical ids apart by that link. Two repositories of
   the same name on one forge show their full paths, `acme/web!7` beside
   `labs/web!7`.
 - **Output that is not a terminal is one table and nothing else.** Agents parse it.

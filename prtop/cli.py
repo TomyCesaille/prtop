@@ -31,7 +31,6 @@ from prtop.report import (
     by_severity,
     deploy_row,
     open_row,
-    plain,
     unreachable_row,
 )
 from prtop.state import load_state, save_state
@@ -217,10 +216,11 @@ def watch(
             print(f"prtop: {e}", file=sys.stderr)
             print("[watch] check failed", flush=True)
             return 1
-        if baseline is not None and plain(report.text) != baseline:
+        # Links included: they tell two forges' identical PR ids apart.
+        if baseline is not None and report.text != baseline:
             print(report.text, flush=True)
             return 0
-        baseline = plain(report.text)
+        baseline = report.text
         print(f"[watch] {datetime.now():%H:%M:%S} no change", flush=True)
         if clock() - started >= cap:
             print(f"TIMEOUT after {cap}s with no PR activity", flush=True)
