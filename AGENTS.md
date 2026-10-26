@@ -149,7 +149,9 @@ Adding a state means choosing its mark first and its glyph last. The
   over, so runs without a production job end the tracking only once all of them
   finished, and five minutes (`DOWNSTREAM_GRACE`) after the last one did. A run
   held on a non-production environment's reviewers reads as `pipeline waiting`
-  until then.
+  until then. A merge commit's first runs can take a while to show up too: a
+  merged pull request is tracked from its merge, and without any run, the five
+  minutes count from `merged_at`.
 
 ## State file
 

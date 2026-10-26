@@ -116,12 +116,7 @@ class FakeGitHub(GitHub):
     def __init__(
         self, rest=None, *, authored=(), assigned=(), threads=None, issues=None, hidden=(), now=None, **settings
     ):
-        self.sleeps: list[float] = []
-        super().__init__(
-            Config(state_dir=Path("unused"), **settings),
-            sleep=self.sleeps.append,
-            now=now or (lambda: datetime.now(UTC)),
-        )
+        super().__init__(Config(state_dir=Path("unused"), **settings), now=now or (lambda: datetime.now(UTC)))
         self.rest = rest or {}
         self.authored, self.assigned = list(authored), list(assigned)
         self.threads = threads or {}
@@ -366,29 +361,18 @@ MERGED = {"repo": REPO, "number": 7, "title": "feat: x", "task": "t", "task_url"
 
 class Merges(unittest.TestCase):
     def merged(self, **pull):
-        return {PULL: {"merged": True, "merge_commit_sha": "abc", "base": {"ref": "main"}, **pull}}
+        merge = {"merged": True, "merge_commit_sha": "abc", "base": {"ref": "main"}, "merged_at": "2026-10-23T18:00:00Z"}
+        return {PULL: {**merge, **pull}}
 
-    def test_a_merged_pull_request_is_tracked_through_its_merge_commits_runs(self):
-        rest = {**self.merged(), runs_for("abc"): listing(run(1))}
-        deployment = FakeGitHub(rest).merged_deployment(MERGED)
-        self.assertEqual(deployment, {**MERGED, "ref": "main", "sha": "abc"})
+    def test_a_merged_pull_request_is_tracked_from_its_merge_commit(self):
+        deployment = FakeGitHub(self.merged()).merged_deployment(MERGED)
+        self.assertEqual(deployment, {**MERGED, "ref": "main", "sha": "abc", "merged_at": "2026-10-23T18:00:00Z"})
 
     def test_a_pull_request_closed_without_merging_is_not_tracked(self):
         self.assertIsNone(FakeGitHub({PULL: {"merged": False}}).merged_deployment(MERGED))
 
     def test_an_entry_that_names_no_pull_request_is_not_tracked(self):
         self.assertIsNone(FakeGitHub().merged_deployment({"title": "x"}))
-
-    def test_runs_that_show_up_a_moment_after_the_merge_are_waited_for(self):
-        forge = FakeGitHub({**self.merged(), runs_for("abc"): listing()})
-        answers = iter([listing(), listing(run(1))])
-        forge.api = lambda path: next(answers) if "actions" in path else forge.rest[path]
-        self.assertIsNotNone(forge.merged_deployment(MERGED))
-
-    def test_a_merge_commit_without_any_run_has_nothing_to_deploy_it(self):
-        forge = FakeGitHub({**self.merged(), runs_for("abc"): listing()})
-        self.assertIsNone(forge.merged_deployment(MERGED))
-        self.assertEqual(forge.sleeps, [2, 2])
 
     def test_a_merge_without_a_merge_commit_is_not_tracked(self):
         self.assertIsNone(FakeGitHub(self.merged(merge_commit_sha=None)).merged_deployment(MERGED))
@@ -546,6 +530,15 @@ class Deployments(unittest.TestCase):
                 jobs_of(5): jobs(job("deploy-staging", status="waiting"))}
         forge = FakeGitHub(rest, now=lambda: datetime(2026, 10, 24, 18, 0, tzinfo=UTC))
         self.assertEqual(self.state({}, forge), model.DeployState(model.PIPELINE_RUNNING, "waiting"))
+
+    def test_a_merge_commit_whose_runs_have_not_shown_up_is_waited_for_a_while(self):
+        dep = {**self.dep(), "merged_at": "2026-10-23T18:00:00Z"}
+        at = datetime(2026, 10, 23, 18, 0, tzinfo=UTC)
+        for minutes, kind in ((4, model.PIPELINE_RUNNING), (5, model.NO_PROD_JOB)):
+            with self.subTest(minutes):
+                forge = FakeGitHub({RECENT_RUNS: listing(), runs_for("abc"): listing()},
+                                   now=lambda m=minutes: at + timedelta(minutes=m))
+                self.assertEqual(forge.deploy_states({KEY: dict(dep)})[KEY].kind, kind)
 
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)

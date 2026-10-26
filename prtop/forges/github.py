@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -26,7 +25,7 @@ from urllib.parse import quote
 from prtop import model
 from prtop.config import Config
 from prtop.forges.command import failure, get_json, run_tool
-from prtop.forges.pipelines import ProdJobs, after_merge, classify_pending, judge_deployments
+from prtop.forges.pipelines import ProdJobs, classify_pending, judge_deployments
 from prtop.model import DeployState, mr_key
 from prtop.tasks import Issue, TaskSource
 
@@ -205,9 +204,10 @@ def actions_status(item: dict) -> str:
     return ACTIONS_STATUS.get(status, status)
 
 
-# How long after a merge commit's last run finished its lack of a production job
-# still leaves the tracking open: a deploy started by `workflow_run` is created
-# only once the run it waits on is over.
+# How long after a merge commit last moved (its latest run, or the merge itself
+# before any run shows up) its lack of a production job still leaves the tracking
+# open: its first runs take a while to show up, and a deploy started by
+# `workflow_run` is created only once the run it waits on is over.
 DOWNSTREAM_GRACE = timedelta(minutes=5)
 
 
@@ -216,8 +216,11 @@ def runs_on(repo: str, ref: str) -> str:
     return f"repos/{repo}/actions/runs?branch={quote(ref, safe='')}&exclude_pull_requests=true"
 
 
-def last_update(runs: list[dict]) -> datetime | None:
-    return max((datetime.fromisoformat(run["updated_at"]) for run in runs if run.get("updated_at")), default=None)
+def last_update(runs: list[dict], merged_at: str | None = None) -> datetime | None:
+    """When the merge commit last moved: its latest run's update, or the merge
+    itself while no run has shown up."""
+    stamps = [merged_at, *(run.get("updated_at") for run in runs)]
+    return max((datetime.fromisoformat(stamp) for stamp in stamps if stamp), default=None)
 
 
 def pipeline_status(runs: list[dict]) -> str:
@@ -234,12 +237,10 @@ class GitHub:
         self,
         config: Config,
         *,
-        sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ):
         self.owner = config.github_owner
         self.prod_jobs = ProdJobs(config.deploy_job_pattern, config.primary_deploy_job_pattern)
-        self._sleep = sleep
         self._now = now
         # A completed run's jobs and a commit's ancestry never change, so a live
         # view asks for them once.
@@ -353,11 +354,8 @@ class GitHub:
         if not repo or not number:
             return None
         pull = self.api(f"repos/{repo}/pulls/{number}") or {}
-        if not pull.get("merged"):
-            return None
-        ref, sha = (pull.get("base") or {}).get("ref") or "main", pull.get("merge_commit_sha")
-        # Without a workflow run for the merge commit, nothing could deploy it.
-        if not sha or not after_merge(lambda: self._commit_runs(repo, ref, sha) or None, self._sleep):
+        sha = pull.get("merge_commit_sha")
+        if not pull.get("merged") or not sha:
             return None
         return {
             "title": entry.get("title", ""),
@@ -366,8 +364,9 @@ class GitHub:
             "repo": repo,
             "number": number,
             "web_url": entry.get("web_url"),
-            "ref": ref,
+            "ref": (pull.get("base") or {}).get("ref") or "main",
             "sha": sha,
+            "merged_at": pull.get("merged_at"),
         }
 
     def _listing(self, path: str, field: str) -> list[dict]:
@@ -463,7 +462,7 @@ class GitHub:
         # to production once approved.
         if any(run.get("status") != "completed" for run in runs):
             return DeployState(model.PIPELINE_RUNNING, "waiting")
-        finished = last_update(runs)
+        finished = last_update(runs, dep.get("merged_at"))
         if finished and self._now() - finished < DOWNSTREAM_GRACE:
             return DeployState(model.PIPELINE_RUNNING, "pending")
         return state
