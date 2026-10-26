@@ -140,7 +140,10 @@ Adding a state means choosing its mark first and its glyph last. The
   together, for the frontier's candidate commits too, since a primary production
   job and its auxiliaries can run in different workflows. Every page of the runs
   and of their jobs is read: a scheduled workflow runs on the default branch's
-  latest commit again and again, burying the runs its push started.
+  latest commit again and again, burying the runs its push started. A workflow
+  run again on the commit supersedes its earlier runs, and each job counts by its
+  latest execution that did not skip it, so a failed deploy redone by hand reads
+  as shipped.
   Run and job states are translated into `pipelines.py`'s words; `waiting`, a
   job held by a protected environment's reviewers, is a manual job, and the
   page of the run holding it is where it is approved. A finished run's jobs and a commit

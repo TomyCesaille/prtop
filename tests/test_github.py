@@ -551,6 +551,24 @@ class Deployments(unittest.TestCase):
                 forge = FakeGitHub(rest, now=lambda m=minutes: at + timedelta(minutes=m))
                 self.assertEqual(self.state({}, forge).kind, kind)
 
+    def test_a_redeploy_that_succeeded_supersedes_the_failed_deploy_before_it(self):
+        failed, redeploy = {**run(5, conclusion="failure"), "workflow_id": 1}, {**run(6), "workflow_id": 1}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(redeploy, failed),
+                jobs_of(5): jobs(job(conclusion="failure")), jobs_of(6): jobs(job(id=2))}
+        self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_a_later_run_that_skips_the_deploy_leaves_it_shipped(self):
+        deploy, scheduled = {**run(5), "workflow_id": 1}, {**run(6), "workflow_id": 1}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(scheduled, deploy),
+                jobs_of(5): jobs(job()), jobs_of(6): jobs(job(conclusion="skipped", id=2))}
+        self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_a_later_run_of_one_workflow_leaves_another_workflows_jobs_counted(self):
+        app, side = {**run(5, status="waiting", conclusion=None), "workflow_id": 1}, {**run(6), "workflow_id": 2}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(side, app),
+                jobs_of(5): jobs(job(status="waiting")), jobs_of(6): jobs(job(id=2))}
+        self.assertEqual(self.state(rest).kind, model.AWAITING_TRIGGER)
+
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)
         finished["updated_at"] = "2026-10-23T18:00:00Z"

@@ -409,10 +409,23 @@ class GitHub:
         return jobs
 
     def _commit(self, repo: str, ref: str, sha: str) -> tuple[list[dict], list[dict]]:
-        """A commit's runs on the branch, and all their jobs together: a primary
-        production job and its auxiliaries can run in different workflows."""
-        runs = self._commit_runs(repo, ref, sha)
-        return runs, [job for run in runs for job in self._jobs(repo, run)]
+        """A commit's runs on the branch, the newest of each workflow, and the
+        jobs of every workflow together: a primary production job and its
+        auxiliaries can run in different workflows.
+
+        A workflow run again on the commit, by hand or on a schedule, supersedes
+        its earlier runs, and each job counts by its latest execution: a deploy
+        that failed and then succeeded has shipped. An execution that skipped the
+        job leaves an earlier one standing."""
+        runs = sorted(self._commit_runs(repo, ref, sha), key=lambda run: run["id"])
+        executions: dict[tuple[int, str], dict] = {}
+        for run in runs:
+            workflow = run.get("workflow_id", run["id"])
+            for job in self._jobs(repo, run):
+                if job["status"] != "skipped" or (workflow, job["name"]) not in executions:
+                    executions[workflow, job["name"]] = job
+        newest = {run.get("workflow_id", run["id"]): run for run in runs}
+        return list(newest.values()), list(executions.values())
 
     def _frontier(self, repo: str, ref: str) -> str | None:
         """The newest commit among the branch's twenty latest runs whose primary
