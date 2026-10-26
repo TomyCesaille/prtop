@@ -77,6 +77,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 """
+
 CLOSING_ISSUES = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -89,7 +90,6 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 """
-
 
 # `mergeStateStatus` values that settle the review state on their own. BLOCKED
 # needs a closer look (see `review_state`); DIRTY and DRAFT are read first.
@@ -341,13 +341,13 @@ class GitHub:
             owner=owner, name=name, number=number,
         )[1]
 
-    # ---------- Merges ----------
     def _closing_issues(self, pr: dict, repo: str, number: int) -> list[Issue]:
         found = nodes(pr, "closingIssuesReferences")
         if ((pr.get("closingIssuesReferences") or {}).get("pageInfo") or {}).get("hasNextPage"):
             found = self._pull_request_pages(CLOSING_ISSUES, "closingIssuesReferences", repo, number)
         return [Issue(f"#{i['number']}", i.get("title", ""), i.get("url")) for i in found]
 
+    # ---------- Merges ----------
 
     def merged_deployment(self, entry: dict) -> dict | None:
         repo, number = entry.get("repo"), entry.get("number")
@@ -426,9 +426,23 @@ class GitHub:
         for sha in dict.fromkeys(run["head_sha"] for run in sorted(recent, key=lambda r: r["id"], reverse=True)):
             if frontier is not None and self._contains(repo, frontier, sha):
                 continue
-            if self.prod_jobs.shipped(self._commit(repo, ref, sha)[1]):
+            if self._shipped(*self._commit(repo, ref, sha)):
                 frontier = sha
         return frontier
+
+    def _shipped(self, runs: list[dict], jobs: list[dict]) -> bool:
+        """Whether the commit's primary production deploy succeeded. Without a
+        job named as the primary, any production deploy job decides, once every
+        run is over and the downstream grace has passed: until then, the primary
+        can still show up in a workflow started by `workflow_run`."""
+        if not self.prod_jobs.shipped(jobs):
+            return False
+        if self.prod_jobs.names_primary(jobs):
+            return True
+        finished = last_update(runs)
+        return all(run.get("status") == "completed" for run in runs) and (
+            finished is None or self._now() - finished >= DOWNSTREAM_GRACE
+        )
 
     def _contains(self, repo: str, deployed: str, sha: str) -> bool:
         """Whether the deployed commit carries `sha`. Unlike pipeline ids on
@@ -448,8 +462,11 @@ class GitHub:
             return DeployState(model.SHIPPED)
         runs, jobs = self._commit(repo, dep["ref"], dep["sha"])
         # Safety net for a prod deploy that fell outside the frontier's window.
-        if self.prod_jobs.shipped(jobs):
+        if self._shipped(runs, jobs):
             return DeployState(model.SHIPPED)
+        if self.prod_jobs.shipped(jobs):
+            # Only jobs not named as the primary deployed so far.
+            return DeployState(model.PIPELINE_RUNNING, "pending")
         trigger_url = ""
         if prod := self.prod_jobs.to_act_on(jobs):
             dep["prod_run_id"] = prod["run_id"]

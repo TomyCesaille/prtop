@@ -540,6 +540,17 @@ class Deployments(unittest.TestCase):
                                    now=lambda m=minutes: at + timedelta(minutes=m))
                 self.assertEqual(forge.deploy_states({KEY: dict(dep)})[KEY].kind, kind)
 
+    def test_an_auxiliary_deploy_alone_proves_nothing_while_the_app_deploy_can_still_show_up(self):
+        finished = run(5)
+        finished["updated_at"] = "2026-10-23T18:00:00Z"
+        rest = {RECENT_RUNS: listing(finished), runs_for("abc"): listing(finished),
+                jobs_of(5): jobs(job("deploy-production-heavy-duty"))}
+        at = datetime(2026, 10, 23, 18, 0, tzinfo=UTC)
+        for minutes, kind in ((4, model.PIPELINE_RUNNING), (5, model.SHIPPED)):
+            with self.subTest(minutes):
+                forge = FakeGitHub(rest, now=lambda m=minutes: at + timedelta(minutes=m))
+                self.assertEqual(self.state({}, forge).kind, kind)
+
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)
         finished["updated_at"] = "2026-10-23T18:00:00Z"

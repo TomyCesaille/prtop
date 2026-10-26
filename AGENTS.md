@@ -152,6 +152,11 @@ Adding a state means choosing its mark first and its glyph last. The
   until then. A merge commit's first runs can take a while to show up too: a
   merged pull request is tracked from its merge, and without any run, the five
   minutes count from `merged_at`.
+- For the same reason, a commit whose production jobs include none named as the
+  primary (`PRTOP_PRIMARY_DEPLOY_JOB_PATTERN`) has shipped only once all its runs
+  finished and those five minutes passed: until then, the primary can still come
+  from a downstream workflow, and an auxiliary deploy alone reads as
+  `pipeline pending`.
 
 ## State file
 

@@ -42,6 +42,12 @@ class ProdJobs:
         prod = [j for j in jobs if self._deploy.search(j.get("name", ""))]
         return [j for j in prod if self._primary.search(j.get("name", ""))] or prod
 
+    def names_primary(self, jobs: list[dict]) -> bool:
+        """Whether a prod deploy job is named as the primary one, rather than
+        `primary` falling back to every prod deploy job."""
+        names = (j.get("name", "") for j in jobs)
+        return any(self._deploy.search(name) and self._primary.search(name) for name in names)
+
     def to_act_on(self, jobs: list[dict]) -> dict | None:
         """The primary prod deploy job to act on: one waiting to be started by
         hand, else the first. Several match when no job is named as the primary,

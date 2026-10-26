@@ -54,6 +54,10 @@ class ProductionJobs(unittest.TestCase):
     def test_without_the_canonical_job_any_prod_deploy_job_decides(self):
         self.assertTrue(PROD_JOBS.shipped([job("success", "deploy-prod-eu")]))
 
+    def test_a_job_named_as_the_primary_is_told_apart_from_the_fallback(self):
+        self.assertTrue(PROD_JOBS.names_primary([job("manual"), job("success", "deploy_production_heavy_duty")]))
+        self.assertFalse(PROD_JOBS.names_primary([job("success", "deploy-prod-eu")]))
+
     def test_the_job_to_act_on_is_the_one_waiting_to_be_started(self):
         jobs = [job("success", "deploy-prod-eu", id=1), job("manual", "deploy-prod-us", id=2)]
         self.assertEqual(PROD_JOBS.to_act_on(jobs)["id"], 2)
