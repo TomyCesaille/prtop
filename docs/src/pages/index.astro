@@ -15,6 +15,11 @@ const setup = `Set up prtop for me: follow https://raw.githubusercontent.com/Tom
 
 const install = `brew install TomyCesaille/tap/prtop    # macOS, Linux
 choco install prtop                    # Windows`;
+
+const configure = `# ~/.config/prtop/.env (%APPDATA%\\prtop\\.env on Windows)
+# gitlab (the default), github, or gitlab,github for both
+PRTOP_FORGES=gitlab,github
+PRTOP_GITLAB_HOST=gitlab.example.com`;
 ---
 
 <Layout>
@@ -80,7 +85,9 @@ choco install prtop                    # Windows`;
   <section class="install section">
     <h2>Install</h2>
     <pre><code>{install}</code></pre>
-    <p>Then <code>glab auth login</code> or <code>gh auth login</code>, and <code>prtop</code>.</p>
+    <p>Sign in with <code>glab auth login</code>, <code>gh auth login</code> or both, and name what prtop reads:</p>
+    <pre><code>{configure}</code></pre>
+    <p>Then run <code>prtop</code>.</p>
   </section>
 
   <section class="howto section">

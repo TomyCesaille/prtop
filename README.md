@@ -48,7 +48,8 @@ Then tell prtop what to read, in `~/.config/prtop/.env` (`%APPDATA%\prtop\.env`
 on Windows):
 
 ```bash
-PRTOP_FORGES=gitlab,github           # gitlab (the default), github, or both
+# gitlab (the default), github, or gitlab,github for both
+PRTOP_FORGES=gitlab,github
 PRTOP_GITLAB_HOST=gitlab.example.com
 ```
 
