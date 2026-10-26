@@ -6,7 +6,7 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-23
+## [0.2.0] - 2026-10-26
 
 ### Added
 
