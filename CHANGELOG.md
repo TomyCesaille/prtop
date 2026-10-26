@@ -6,13 +6,11 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- The live view's help names prtop's version.
-
 ## [0.2.0] - 2026-10-26
 
 ### Added
+
+- The live view's help names prtop's version.
 
 - GitHub: the open pull requests you opened or are assigned to on github.com,
   read through `gh`, alone (`PRTOP_FORGES=github`) or in one table with a GitLab

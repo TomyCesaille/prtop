@@ -216,6 +216,11 @@ def runs_on(repo: str, ref: str) -> str:
     return f"repos/{repo}/actions/runs?branch={quote(ref, safe='')}&exclude_pull_requests=true"
 
 
+def started(run: dict) -> tuple[str, int]:
+    """When a run's latest attempt started: a re-run keeps its run id."""
+    return run.get("run_started_at") or run.get("created_at") or "", run["id"]
+
+
 def last_update(runs: list[dict], merged_at: str | None = None) -> datetime | None:
     """When the merge commit last moved: its latest run's update, or the merge
     itself while no run has shown up."""
@@ -409,23 +414,29 @@ class GitHub:
         return jobs
 
     def _commit(self, repo: str, ref: str, sha: str) -> tuple[list[dict], list[dict]]:
-        """A commit's runs on the branch, the newest of each workflow, and the
-        jobs of every workflow together: a primary production job and its
-        auxiliaries can run in different workflows.
+        """A commit's runs on the branch, and the jobs of every workflow together:
+        a primary production job and its auxiliaries can run in different
+        workflows.
 
-        A workflow run again on the commit, by hand or on a schedule, supersedes
-        its earlier runs, and each job counts by its latest execution: a deploy
-        that failed and then succeeded has shipped. An execution that skipped the
-        job leaves an earlier one standing."""
-        runs = sorted(self._commit_runs(repo, ref, sha), key=lambda run: run["id"])
-        executions: dict[tuple[int, str], dict] = {}
+        A workflow run again on the commit, by hand, on a schedule or as a
+        re-run, supersedes its earlier runs, in the order their latest attempts
+        started. The runs returned are the newest of each workflow and any
+        earlier one still going. A job counts by its latest run that did not
+        skip it, every job of that name in the run: a deploy that failed and then
+        succeeded has shipped."""
+        runs = sorted(self._commit_runs(repo, ref, sha), key=started)
+        executions: dict[tuple[int, str], list[dict]] = {}
         for run in runs:
             workflow = run.get("workflow_id", run["id"])
+            named: dict[str, list[dict]] = {}
             for job in self._jobs(repo, run):
-                if job["status"] != "skipped" or (workflow, job["name"]) not in executions:
-                    executions[workflow, job["name"]] = job
+                named.setdefault(job["name"], []).append(job)
+            for name, jobs in named.items():
+                if any(job["status"] != "skipped" for job in jobs) or (workflow, name) not in executions:
+                    executions[workflow, name] = jobs
         newest = {run.get("workflow_id", run["id"]): run for run in runs}
-        return list(newest.values()), list(executions.values())
+        going = [run for run in runs if run.get("status") != "completed" and run not in newest.values()]
+        return [*going, *newest.values()], [job for jobs in executions.values() for job in jobs]
 
     def _frontier(self, repo: str, ref: str) -> str | None:
         """The newest commit among the branch's twenty latest runs whose primary
