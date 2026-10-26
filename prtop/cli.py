@@ -19,6 +19,7 @@ from datetime import datetime
 
 from prtop import __version__, live, model
 from prtop.config import Config, ConfigError, load_config
+from prtop.demo import TITLE as DEMO_TITLE
 from prtop.demo import demo_story
 from prtop.forges import Forge, make_forges
 from prtop.model import ForgeError
@@ -295,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     on_report = None
     if args.demo:
-        fetch, title = demo_story(), "demo"
+        fetch, title = demo_story(), DEMO_TITLE
     else:
         try:
             config = load_config()
