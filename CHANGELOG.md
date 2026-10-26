@@ -10,8 +10,6 @@ prtop's user-facing changes, newest first. The format follows
 
 ### Added
 
-- The live view's help names prtop's version.
-
 - GitHub: the open pull requests you opened or are assigned to on github.com,
   read through `gh`, alone (`PRTOP_FORGES=github`) or in one table with a GitLab
   instance's merge requests (`PRTOP_FORGES=gitlab,github`). They read like merge
@@ -21,6 +19,7 @@ prtop's user-facing changes, newest first. The format follows
   their merge commit, with the same deploy job patterns. A job waiting on a
   protected environment's reviewers reads as awaiting prod trigger, linked to its
   run.
+- The live view's help names prtop's version.
 
 ### Changed
 
