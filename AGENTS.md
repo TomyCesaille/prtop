@@ -14,7 +14,7 @@ tools, one per forge.
 | `prtop/live.py` | The live view: the frame, the fetch loop, the keys. Pure enough to test with a fake terminal and clock. |
 | `prtop/terminal.py` | The real terminal: alternate screen, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
 | `prtop/report.py` | Marks, Status cells, row order and the table. The accessibility contract lives here. |
-| `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, the `repo!number` id, `ForgeError`. |
+| `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, the state-file key and the `repo!number` the PR column shows, `ForgeError`. |
 | `prtop/forges/` | One module per forge behind the `Forge` protocol: `gitlab.py` and `github.py` each own every call and field name of their service. `command.py` runs `glab` and `gh`; `pipelines.py` holds what both map production tracking onto: job statuses, the production jobs, the frontier. |
 | `prtop/tasks.py` | Task sources: what fills the Task column. |
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
@@ -30,7 +30,9 @@ tools, one per forge.
 - **Every forge reads the same in the table.** A pull request is `repo!number`
   like a merge request, with the same states and marks; the link on the cell says
   where it lives. Each forge keeps its own state file, `<host>.json`, and the live
-  view tells two forges' identical ids apart by that link.
+  view tells two forges' identical ids apart by that link. Two repositories of
+  the same name on one forge show their full paths, `acme/web!7` beside
+  `labs/web!7`.
 - **Output that is not a terminal is one table and nothing else.** Agents parse it.
   The live view's status line, key bar and highlighting never reach it, and errors
   go to stderr.
@@ -146,9 +148,9 @@ Adding a state means choosing its mark first and its glyph last. The
 
 ## State file
 
-One per forge, `<host>.json`, keyed by the `repo!number` the PR column shows, or
-by the full path, `acme/web!7`, where two repositories of the same name would
-collide.
+One per forge, `<host>.json`, keyed by the merge request's full path and number,
+`acme/web!1931`: the same key from one run to the next, whatever else is open,
+where the PR column shows `web!1931`.
 GitLab's entries are below; GitHub's carry `repo` (`owner/name`) and `number`
 where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
 `sha` and `prod_run_id`.
@@ -156,14 +158,14 @@ where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
 ```jsonc
 {
   "open_mrs": {
-    "web!1931": { "title", "task", "task_url", "status", "fully_approved",
-                  "has_conflicts", "threads_await_user", "approvals", "note_count",
-                  "project_path", "iid", "web_url", "last_checked" }
+    "acme/web!1931": { "title", "task", "task_url", "status", "fully_approved",
+                       "has_conflicts", "threads_await_user", "approvals", "note_count",
+                       "project_path", "iid", "web_url", "last_checked" }
   },
   "deployments": {
-    "api!2544": { "title", "task", "task_url", "project_path", "iid", "web_url",
-                  "ref", "pipeline_id", "pipeline_status", "pipeline_url",
-                  "prod_job_id" }
+    "acme/api!2544": { "title", "task", "task_url", "project_path", "iid", "web_url",
+                       "ref", "pipeline_id", "pipeline_status", "pipeline_url",
+                       "prod_job_id" }
   },
   "last_checked": "<ISO 8601>"
 }

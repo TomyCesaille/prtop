@@ -27,7 +27,7 @@ from prtop import model
 from prtop.config import Config
 from prtop.forges.command import failure, get_json, run_tool
 from prtop.forges.pipelines import ProdJobs, after_merge, classify_pending, judge_deployments
-from prtop.model import DeployState, keyed_by_short_id
+from prtop.model import DeployState, mr_key
 from prtop.tasks import Issue, TaskSource
 
 HOST = "github.com"
@@ -283,12 +283,12 @@ class GitHub:
                 return {}
             batches = [ids[i:i + BATCH] for i in range(0, len(ids), BATCH)]
             prs = [pr for batch in pool.map(self._pull_requests, batches) for pr in batch]
-            return keyed_by_short_id(pool.map(lambda pr: self._entry(pr, login, tasks), prs))
+            return dict(pool.map(lambda pr: self._entry(pr, login, tasks), prs))
 
     def _pull_requests(self, ids: list[str]) -> list[dict]:
         return [pr for pr in self.query(PULL_REQUESTS, ids=ids).get("nodes") or [] if pr]
 
-    def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, int, dict]:
+    def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, dict]:
         repo = pr["repository"]["nameWithOwner"]
         number = pr["number"]
         status, threads_await_user = review_state(pr, cache(lambda: self._threads(repo, number)), login)
@@ -297,7 +297,7 @@ class GitHub:
             for i in nodes(pr, "closingIssuesReferences")
         ]
         task = tasks.resolve(pr.get("headRefName"), lambda: issues)
-        return repo, number, {
+        return mr_key(repo, number), {
             "title": pr.get("title", ""),
             "task": task.label if task else "",
             "task_url": task.url if task else None,

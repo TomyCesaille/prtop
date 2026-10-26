@@ -177,6 +177,21 @@ class Check(unittest.TestCase):
         self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True)}
         self.assertTrue(self.check().action_needed)
 
+    def test_two_repositories_of_the_same_name_show_their_full_paths(self):
+        self.forge.open = {"acme/web!7": entry(7), "labs/web!7": entry(7), "acme/web!8": entry(8)}
+        cells = [plain(row.pr) for row in self.check().rows if row]
+        self.assertEqual(sorted(cells), ["`acme/web!7`", "`labs/web!7`", "`web!8`"])
+
+    def test_a_merge_is_followed_when_a_namesake_repository_opens_the_same_number(self):
+        self.forge.open = {"acme/web!7": entry(7, title="feat: the merged one")}
+        self.check()
+        self.forge.open, self.forge.merged = {"labs/web!7": entry(7, title="feat: the new one")}, {7}
+        report = self.check()
+        self.assertEqual(self.forge.asked_about_merges, [7])
+        self.assertIn("acme/web!7", self.saved()["deployments"])
+        self.assertIn("`acme/web!7`", plain(report.text))
+        self.assertIn("`labs/web!7`", plain(report.text))
+
     def test_a_deploy_awaiting_its_trigger_never_calls_for_action(self):
         self.forge.open = {"frontend!1": entry(1)}
         self.check()

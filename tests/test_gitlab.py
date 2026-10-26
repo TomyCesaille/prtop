@@ -12,13 +12,14 @@ from prtop.forges.gitlab import (
     project_path_from_summary,
     unresolved_threads_await_user,
 )
-from prtop.model import ForgeError, mr_short_id
+from prtop.model import ForgeError, short_ids
 from prtop.report import REVIEW_SIGNAL
 from prtop.tasks import IssueTasks, NoTasks, task_source
 
 HOST = "gitlab.example.com"
 PROJECT = "acme/web/frontend"
 ENCODED = "acme%2Fweb%2Ffrontend"
+KEY = f"{PROJECT}!7"
 MR = f"projects/{ENCODED}/merge_requests/7"
 MR_DETAIL = f"{MR}?include_diverged_commits_count=true"
 ME = "john.doe"
@@ -109,27 +110,27 @@ class OpenMergeRequests(unittest.TestCase):
         forge.open_merge_requests(NoTasks())
         self.assertEqual(forge.calls, [listing])
 
-    def test_an_mr_is_keyed_by_repo_and_number_with_its_review_state(self):
-        entry = FakeGitLab(open_mr()).open_merge_requests(NoTasks())["frontend!7"]
+    def test_an_mr_is_keyed_by_its_project_and_number_with_its_review_state(self):
+        entry = FakeGitLab(open_mr()).open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["status"], model.AWAITING_REVIEW)
         self.assertEqual(entry["web_url"], f"https://{HOST}/{PROJECT}/-/merge_requests/7")
 
     def test_an_mr_in_review_that_fell_behind_its_target_needs_a_rebase(self):
-        entry = FakeGitLab(open_mr(diverged_commits_count=1)).open_merge_requests(NoTasks())["frontend!7"]
+        entry = FakeGitLab(open_mr(diverged_commits_count=1)).open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["status"], model.REBASE_NEEDED)
 
     def test_a_draft_behind_its_target_stays_a_draft(self):
         forge = FakeGitLab(open_mr("draft_status", draft=True, diverged_commits_count=3))
-        entry = forge.open_merge_requests(NoTasks())["frontend!7"]
+        entry = forge.open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["status"], model.DRAFT)
 
     def test_reviewer_feedback_outranks_a_branch_behind_its_target(self):
         forge = FakeGitLab(open_mr("requested_changes", diverged_commits_count=2))
-        entry = forge.open_merge_requests(NoTasks())["frontend!7"]
+        entry = forge.open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["status"], model.CHANGES_REQUESTED)
 
     def test_a_merge_status_gitlab_adds_later_passes_through_raw(self):
-        entry = FakeGitLab(open_mr("some_status_from_the_future")).open_merge_requests(NoTasks())["frontend!7"]
+        entry = FakeGitLab(open_mr("some_status_from_the_future")).open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["status"], "some_status_from_the_future")
 
     def test_every_gitlab_status_maps_to_a_state_the_report_knows(self):
@@ -139,7 +140,7 @@ class OpenMergeRequests(unittest.TestCase):
         responses = open_mr("discussions_not_resolved")
         responses[f"{MR}/discussions?per_page=100&page=1"] = [thread(ME)]
         responses["user"] = {"username": ME}
-        entry = FakeGitLab(responses).open_merge_requests(NoTasks())["frontend!7"]
+        entry = FakeGitLab(responses).open_merge_requests(NoTasks())[KEY]
         self.assertFalse(entry["threads_await_user"])
 
     def test_a_configured_username_is_not_asked_of_the_instance(self):
@@ -178,13 +179,13 @@ class OpenMergeRequests(unittest.TestCase):
         responses = open_mr("discussions_not_resolved")
         responses[f"{MR}/discussions?per_page=100&page=1"] = [thread(ME)] * 100
         responses[f"{MR}/discussions?per_page=100&page=2"] = [thread("alice.martin")]
-        entry = FakeGitLab(responses, gitlab_username=ME).open_merge_requests(NoTasks())["frontend!7"]
+        entry = FakeGitLab(responses, gitlab_username=ME).open_merge_requests(NoTasks())[KEY]
         self.assertTrue(entry["threads_await_user"])
 
     def test_more_than_a_hundred_open_mrs_are_all_listed(self):
         mrs = [{"iid": n, "references": {"full": f"acme/repo{n}!{n}"}} for n in range(130)]
         forge = FakeGitLab({LIST_ALL: mrs[:100], LIST_ALL.removesuffix("&page=1") + "&page=2": mrs[100:]})
-        forge._hydrate = lambda summary, tasks: (summary["references"]["full"].split("!")[0], summary["iid"], {})
+        forge._hydrate = lambda summary, tasks: (summary["references"]["full"], {})
         self.assertEqual(len(forge.open_merge_requests(NoTasks())), 130)
 
     def test_discussions_are_read_ten_pages_deep_at_most(self):
@@ -206,18 +207,18 @@ class Tasks(unittest.TestCase):
     def test_an_mr_closing_an_issue_takes_it_as_its_task(self):
         responses = open_mr()
         responses[f"{MR}/closes_issues"] = [{"iid": 12, "title": "Login fails", "web_url": "https://x.example/12"}]
-        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())["frontend!7"]
+        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual((entry["task"], entry["task_url"]), ("#12 Login fails", "https://x.example/12"))
 
     def test_an_issue_from_an_external_tracker_goes_by_its_key(self):
         responses = open_mr()
         responses[f"{MR}/closes_issues"] = [{"id": "PROJ-9", "title": "Login fails"}]
-        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())["frontend!7"]
+        entry = FakeGitLab(responses).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual(entry["task"], "PROJ-9 Login fails")
 
     def test_a_branch_based_source_costs_no_issue_call(self):
         forge = FakeGitLab(open_mr(source_branch="PROJ-9-login"))
-        entry = forge.open_merge_requests(task_source(Config(state_dir=Path("u"), task_source="jira")))["frontend!7"]
+        entry = forge.open_merge_requests(task_source(Config(state_dir=Path("u"), task_source="jira")))[KEY]
         self.assertEqual(entry["task"], "PROJ-9 login")
         self.assertNotIn(f"{MR}/closes_issues", forge.calls)
 
@@ -321,7 +322,7 @@ class Deployments(unittest.TestCase):
 
 class MrIds(unittest.TestCase):
     def test_the_table_names_the_mr_by_repo_and_number_alone(self):
-        self.assertEqual(mr_short_id(PROJECT, 1904), "frontend!1904")
+        self.assertEqual(short_ids([f"{PROJECT}!1904"]), {f"{PROJECT}!1904": "frontend!1904"})
 
     def test_the_project_is_read_from_the_mr_reference(self):
         self.assertEqual(project_path_from_summary({"references": {"full": f"{PROJECT}!7"}}), PROJECT)

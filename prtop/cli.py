@@ -61,14 +61,13 @@ def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict)
     return unconfirmed
 
 
-def deployment_rows(forge: Forge, deployments: dict) -> list[Row]:
-    rows = []
-    for key, state in forge.deploy_states(deployments).items():
+def unfinished_deployments(forge: Forge, deployments: dict) -> dict[str, model.DeployState]:
+    """Where each tracked deployment stands; the ones that finished stop being tracked."""
+    states = forge.deploy_states(deployments)
+    for key, state in states.items():
         if state.kind in model.FINISHED:
             deployments.pop(key)
-        else:
-            rows.append(deploy_row(key, deployments[key], state))
-    return rows
+    return {key: state for key, state in states.items() if key in deployments}
 
 
 def check_forge(config: Config, forge: Forge, tasks: TaskSource) -> tuple[list[Row], list[Row]]:
@@ -94,11 +93,13 @@ def check_forge(config: Config, forge: Forge, tasks: TaskSource) -> tuple[list[R
         known = {**known, **track_merges(forge, known, previous, deployments)}
     state["open_mrs"] = known
 
+    deploy_states = unfinished_deployments(forge, deployments) if config.deploy_tracking else {}
+    ids = model.short_ids([*open_mrs, *deploy_states])
     open_rows = (
         [unreachable_row(forge.host)] if error is not None
-        else [open_row(key, entry) for key, entry in open_mrs.items()]
+        else [open_row(ids[key], entry) for key, entry in open_mrs.items()]
     )
-    deploy_rows = deployment_rows(forge, deployments) if config.deploy_tracking else []
+    deploy_rows = [deploy_row(ids[key], deployments[key], state) for key, state in deploy_states.items()]
     save_state(state_file, state)
     return open_rows, deploy_rows
 

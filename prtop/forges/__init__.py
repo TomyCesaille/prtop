@@ -23,7 +23,7 @@ class Forge(Protocol):
     host: str
 
     def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
-        """Every open MR of yours, keyed as `model.keyed_by_short_id` keys them.
+        """Every open MR of yours, keyed by `model.mr_key`.
 
         Each entry carries `title`, `task` and `task_url` (from `tasks`),
         `status` (a review state of `prtop.model`), `fully_approved`,

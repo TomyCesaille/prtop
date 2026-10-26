@@ -26,6 +26,7 @@ from prtop.tasks import IssueTasks, NoTasks, task_source
 
 ME = "octocat"
 REPO = "acme/web"
+KEY = f"{REPO}!7"
 PULL = f"repos/{REPO}/pulls/7"
 COMPARE = f"repos/{REPO}/compare/abc...def?per_page=1"
 
@@ -275,13 +276,13 @@ class ThreadAuthors(unittest.TestCase):
 
 class OpenPullRequests(unittest.TestCase):
     def test_a_pull_request_is_keyed_and_linked_like_a_merge_request(self):
-        entry = FakeGitHub(authored=[pull_request()]).open_merge_requests(NoTasks())["web!7"]
+        entry = FakeGitHub(authored=[pull_request()]).open_merge_requests(NoTasks())[KEY]
         self.assertEqual(entry["web_url"], f"https://github.com/{REPO}/pull/7")
         self.assertEqual((entry["repo"], entry["number"]), (REPO, 7))
 
     def test_the_pull_requests_you_opened_and_the_ones_assigned_to_you_are_listed(self):
         forge = FakeGitHub(authored=[pull_request(7)], assigned=[pull_request(8)])
-        self.assertEqual(set(forge.open_merge_requests(NoTasks())), {"web!7", "web!8"})
+        self.assertEqual(set(forge.open_merge_requests(NoTasks())), {KEY, f"{REPO}!8"})
         self.assertEqual({q["search"] for q in forge.asked("search")}, {
             "is:pr is:open archived:false author:@me",
             "is:pr is:open archived:false assignee:@me",
@@ -289,7 +290,7 @@ class OpenPullRequests(unittest.TestCase):
 
     def test_a_pull_request_you_opened_and_are_assigned_to_is_read_once(self):
         forge = FakeGitHub(authored=[pull_request(7)], assigned=[pull_request(7)])
-        self.assertEqual(list(forge.open_merge_requests(NoTasks())), ["web!7"])
+        self.assertEqual(list(forge.open_merge_requests(NoTasks())), [KEY])
         self.assertEqual(forge.asked("ids"), [{"ids": ["PR_7"]}])
 
     def test_a_long_list_is_read_in_batches_github_answers_in_time(self):
@@ -314,13 +315,13 @@ class OpenPullRequests(unittest.TestCase):
 
     def test_a_pull_request_an_error_left_unreadable_is_skipped(self):
         forge = FakeGitHub(authored=[None, pull_request(7), pull_request(8)], hidden={"PR_8"})
-        self.assertEqual(list(forge.open_merge_requests(NoTasks())), ["web!7"])
+        self.assertEqual(list(forge.open_merge_requests(NoTasks())), [KEY])
 
-    def test_two_repositories_of_the_same_name_keep_both_their_rows(self):
+    def test_two_repositories_of_the_same_name_keep_both_their_pull_requests(self):
         labs = pull_request(7, repository={"nameWithOwner": "labs/web", "viewerPermission": "WRITE"})
         labs["id"] = "PR_labs_7"
-        forge = FakeGitHub(authored=[pull_request(7), labs, pull_request(8)])
-        self.assertEqual(set(forge.open_merge_requests(NoTasks())), {"acme/web!7", "labs/web!7", "web!8"})
+        forge = FakeGitHub(authored=[pull_request(7), labs])
+        self.assertEqual(set(forge.open_merge_requests(NoTasks())), {KEY, "labs/web!7"})
 
     def test_threads_are_asked_for_by_repository_and_number(self):
         forge = FakeGitHub(authored=[pull_request(threads=[False])], threads={7: [thread(ME)]})
@@ -330,12 +331,12 @@ class OpenPullRequests(unittest.TestCase):
     def test_an_issue_the_pull_request_closes_is_its_task(self):
         issue = {"number": 12, "title": "Login fails", "url": "https://github.com/acme/web/issues/12"}
         pr = pull_request(closingIssuesReferences={"nodes": [issue]})
-        entry = FakeGitHub(authored=[pr]).open_merge_requests(IssueTasks())["web!7"]
+        entry = FakeGitHub(authored=[pr]).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual((entry["task"], entry["task_url"]), ("#12 Login fails", issue["url"]))
 
     def test_a_branch_convention_reads_the_head_branch(self):
         tasks = task_source(Config(state_dir=Path("u"), task_source="jira"))
-        entry = FakeGitHub(authored=[pull_request(headRefName="PROJ-9-login")]).open_merge_requests(tasks)["web!7"]
+        entry = FakeGitHub(authored=[pull_request(headRefName="PROJ-9-login")]).open_merge_requests(tasks)[KEY]
         self.assertEqual((entry["task"], entry["task_url"]), ("PROJ-9 login", None))
 
 
@@ -378,7 +379,7 @@ class Deployments(unittest.TestCase):
 
     def state(self, rest, forge=None):
         forge = forge or FakeGitHub(rest)
-        return forge.deploy_states({"web!7": self.dep()})["web!7"]
+        return forge.deploy_states({KEY: self.dep()})[KEY]
 
     def frontier(self, sha="def"):
         return {runs_for(None, 20): listing(run(9, sha)), runs_for(sha): listing(run(9, sha)), jobs_of(9): jobs(job())}

@@ -29,8 +29,8 @@ When you relay a state, name it in words, never by its emoji alone. If every row
 
 prtop only reads. To act, find the row in prtop's state files, one per forge in
 `~/.local/state/prtop/` (`%LOCALAPPDATA%\prtop\` on Windows): `<gitlab host>.json`
-and `github.com.json`, under `open_mrs` or `deployments`, keyed by the PR column's
-`repo!number`. Pass `--hostname` on every call, so the working directory's git
+and `github.com.json`, under `open_mrs` or `deployments`, keyed by the full path
+and number, `acme/web!7` where the PR column shows `web!7`. Pass `--hostname` on every call, so the working directory's git
 remote cannot pick another host.
 
 On GitLab, an entry carries the `project_path` (encode its slashes as `%2F`) and

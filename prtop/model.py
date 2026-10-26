@@ -15,24 +15,25 @@ class ForgeError(RuntimeError):
     """The forge did not answer, or answered something unreadable."""
 
 
-def mr_short_id(project_path: str, number: int) -> str:
-    """The `repo!number` the PR column shows, and the state-file key. The same on
-    every forge: the cell links to the merge request, which says where it lives."""
-    return f"{project_path.rsplit('/', 1)[-1]}!{number}"
+def mr_key(project_path: str, number: int) -> str:
+    """A merge request's key in the state file, `acme/web!7`: the same merge
+    request from one run to the next, whatever else is open beside it."""
+    return f"{project_path}!{number}"
 
 
-def keyed_by_short_id(entries: Iterable[tuple[str, int, dict]]) -> dict[str, dict]:
-    """(project path, number, entry) triples keyed by `mr_short_id`. Where two
-    repositories of the same name would collide, both keep their full path,
-    `acme/web!7` beside `labs/web!7`, so neither row nor merge baseline is lost."""
-    entries = list(entries)
-    taken = Counter(mr_short_id(path, number) for path, number, _ in entries)
+def short_ids(keys: Iterable[str]) -> dict[str, str]:
+    """The `repo!number` the PR column shows for each `mr_key`, the same on every
+    forge: the cell links to the merge request, which says where it lives. Where
+    two repositories of the same name would collide, both show their full path,
+    `acme/web!7` beside `labs/web!7`."""
 
-    def key(path: str, number: int) -> str:
-        short = mr_short_id(path, number)
-        return short if taken[short] == 1 else f"{path}!{number}"
+    def short(key: str) -> str:
+        path, _, number = key.rpartition("!")
+        return f"{path.rsplit('/', 1)[-1]}!{number}"
 
-    return {key(path, number): entry for path, number, entry in entries}
+    keys = set(keys)
+    taken = Counter(map(short, keys))
+    return {key: short(key) if taken[short(key)] == 1 else key for key in keys}
 
 
 # Review states of an open merge request. A state the forge cannot map passes

@@ -24,6 +24,8 @@ prtop's user-facing changes, newest first. The format follows
 
 - `PRTOP_STATE_DIR` replaces `PRTOP_STATE_FILE`: each forge keeps its
   `<host>.json` there. The default location does not move.
+- The state file keys a merge request by its full path, `acme/web!7`, where the
+  PR column shows `web!7`.
 - The Chocolatey package installs `gh` alongside `glab`.
 
 ## [0.1.0] - 2026-10-23

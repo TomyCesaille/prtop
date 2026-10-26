@@ -177,19 +177,19 @@ class Row(NamedTuple):
     task_url: str | None = None
 
 
-def open_row(key: str, entry: dict) -> Row:
+def open_row(mr_id: str, entry: dict) -> Row:
     mark, status = fmt_status(
         entry["status"], entry["fully_approved"], entry["has_conflicts"],
         entry["threads_await_user"],
     )
     task = entry.get("task") or "—"
-    return Row(mark, entry["title"], task, linked_mr_id(entry, key), status, entry.get("task_url"))
+    return Row(mark, entry["title"], task, linked_mr_id(entry, mr_id), status, entry.get("task_url"))
 
 
-def deploy_row(key: str, entry: dict, state: DeployState) -> Row:
+def deploy_row(mr_id: str, entry: dict, state: DeployState) -> Row:
     mark, status = deploy_signal(state)
     task = entry.get("task") or "—"
-    return Row(mark, entry.get("title", ""), task, linked_mr_id(entry, key), status, entry.get("task_url"))
+    return Row(mark, entry.get("title", ""), task, linked_mr_id(entry, mr_id), status, entry.get("task_url"))
 
 
 def unreachable_row(host: str) -> Row:
