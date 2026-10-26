@@ -1,3 +1,5 @@
+<img src="docs/public/favicon.svg" alt="" width="64" height="64">
+
 # prtop
 
 htop for your merge requests. Your GitLab MRs and GitHub PRs, from review to

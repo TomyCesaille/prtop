@@ -41,7 +41,7 @@ choco install prtop                    # Windows`;
   </a>
 
   <header class="header">
-    <span class="logo">prtop</span>
+    <span class="logo"><img src={`${base}/favicon.svg`} width="28" height="28" alt="" />prtop</span>
     <ThemeToggle />
   </header>
 
@@ -116,6 +116,9 @@ choco install prtop                    # Windows`;
   }
 
   .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-family: var(--font-mono);
     font-size: 20px;
     font-weight: 700;
