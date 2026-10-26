@@ -6,6 +6,7 @@
     <title>prtop</title>
     <authors>Joris La Cancellera</authors>
     <owners>TomyCesaille</owners>
+    <copyright>Copyright (c) 2026 Joris La Cancellera</copyright>
     <projectUrl>https://github.com/TomyCesaille/prtop</projectUrl>
     <projectSourceUrl>https://github.com/TomyCesaille/prtop</projectSourceUrl>
     <packageSourceUrl>https://github.com/TomyCesaille/prtop/tree/main/packaging/chocolatey</packageSourceUrl>
