@@ -206,13 +206,13 @@ class OpenMergeRequests(unittest.TestCase):
 class Tasks(unittest.TestCase):
     def test_an_mr_closing_an_issue_takes_it_as_its_task(self):
         responses = open_mr()
-        responses[f"{MR}/closes_issues"] = [{"iid": 12, "title": "Login fails", "web_url": "https://x.example/12"}]
+        responses[f"{MR}/closes_issues?per_page=100&page=1"] = [{"iid": 12, "title": "Login fails", "web_url": "https://x.example/12"}]
         entry = FakeGitLab(responses).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual((entry["task"], entry["task_url"]), ("#12 Login fails", "https://x.example/12"))
 
     def test_an_issue_from_an_external_tracker_goes_by_its_key(self):
         responses = open_mr()
-        responses[f"{MR}/closes_issues"] = [{"id": "PROJ-9", "title": "Login fails"}]
+        responses[f"{MR}/closes_issues?per_page=100&page=1"] = [{"id": "PROJ-9", "title": "Login fails"}]
         entry = FakeGitLab(responses).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual(entry["task"], "PROJ-9 Login fails")
 
@@ -220,7 +220,7 @@ class Tasks(unittest.TestCase):
         forge = FakeGitLab(open_mr(source_branch="PROJ-9-login"))
         entry = forge.open_merge_requests(task_source(Config(state_dir=Path("u"), task_source="jira")))[KEY]
         self.assertEqual(entry["task"], "PROJ-9 login")
-        self.assertNotIn(f"{MR}/closes_issues", forge.calls)
+        self.assertNotIn(f"{MR}/closes_issues?per_page=100&page=1", forge.calls)
 
 
 class Merges(unittest.TestCase):

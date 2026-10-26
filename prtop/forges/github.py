@@ -59,7 +59,7 @@ query($ids: [ID!]!) {
       reviewDecision mergeable mergeStateStatus
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } }
-      closingIssuesReferences(first: 10) { nodes { number title url } }
+      closingIssuesReferences(first: 10) { pageInfo { hasNextPage } nodes { number title url } }
     }
   }
 }
@@ -78,6 +78,19 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 """
+CLOSING_ISSUES = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      closingIssuesReferences(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title url }
+      }
+    }
+  }
+}
+"""
+
 
 # `mergeStateStatus` values that settle the review state on their own. BLOCKED
 # needs a closer look (see `review_state`); DIRTY and DRAFT are read first.
@@ -296,12 +309,10 @@ class GitHub:
     def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, dict]:
         repo = pr["repository"]["nameWithOwner"]
         number = pr["number"]
-        status, threads_await_user = review_state(pr, cache(lambda: self._threads(repo, number)), login)
-        issues = [
-            Issue(f"#{i['number']}", i.get("title", ""), i.get("url"))
-            for i in nodes(pr, "closingIssuesReferences")
-        ]
-        task = tasks.resolve(pr.get("headRefName"), lambda: issues)
+        status, threads_await_user = review_state(
+            pr, cache(lambda: self._pull_request_pages(REVIEW_THREADS, "reviewThreads", repo, number)), login
+        )
+        task = tasks.resolve(pr.get("headRefName"), lambda: self._closing_issues(pr, repo, number))
         return mr_key(repo, number), {
             "title": pr.get("title", ""),
             "task": task.label if task else "",
@@ -320,15 +331,22 @@ class GitHub:
             "last_checked": datetime.now(UTC).isoformat(),
         }
 
-    def _threads(self, repo: str, number: int) -> list[dict]:
+    def _pull_request_pages(self, document: str, connection: str, repo: str, number: int) -> list[dict]:
+        """Every node of one of a pull request's connections, across its pages."""
         owner, name = repo.split("/", 1)
         return self._every_page(
-            REVIEW_THREADS,
-            lambda data: ((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads"),
+            document,
+            lambda data: ((data.get("repository") or {}).get("pullRequest") or {}).get(connection),
             owner=owner, name=name, number=number,
         )[1]
 
     # ---------- Merges ----------
+    def _closing_issues(self, pr: dict, repo: str, number: int) -> list[Issue]:
+        found = nodes(pr, "closingIssuesReferences")
+        if ((pr.get("closingIssuesReferences") or {}).get("pageInfo") or {}).get("hasNextPage"):
+            found = self._pull_request_pages(CLOSING_ISSUES, "closingIssuesReferences", repo, number)
+        return [Issue(f"#{i['number']}", i.get("title", ""), i.get("url")) for i in found]
+
 
     def merged_deployment(self, entry: dict) -> dict | None:
         repo, number = entry.get("repo"), entry.get("number")

@@ -12,6 +12,7 @@ from unittest import mock
 from prtop import model
 from prtop.config import Config
 from prtop.forges.github import (
+    CLOSING_ISSUES,
     MERGE_STATE,
     OPEN_PULL_REQUESTS,
     PULL_REQUESTS,
@@ -112,7 +113,9 @@ class FakeGitHub(GitHub):
     """Serves REST `rest[path]`, and the pull requests in `authored` and
     `assigned` to the queries; a path it was not given fails like an outage."""
 
-    def __init__(self, rest=None, *, authored=(), assigned=(), threads=None, hidden=(), now=None, **settings):
+    def __init__(
+        self, rest=None, *, authored=(), assigned=(), threads=None, issues=None, hidden=(), now=None, **settings
+    ):
         self.sleeps: list[float] = []
         super().__init__(
             Config(state_dir=Path("unused"), **settings),
@@ -122,6 +125,7 @@ class FakeGitHub(GitHub):
         self.rest = rest or {}
         self.authored, self.assigned = list(authored), list(assigned)
         self.threads = threads or {}
+        self.issues = issues or {}
         # Pull requests the search finds but whose details come back empty.
         self.hidden = set(hidden)
         self.calls: list[str] = []
@@ -141,6 +145,9 @@ class FakeGitHub(GitHub):
         if document == PULL_REQUESTS:
             known = {pr["id"]: pr for pr in [*self.authored, *self.assigned] if pr and pr["id"] not in self.hidden}
             return {"nodes": [known.get(id) for id in variables["ids"]]}
+        if document == CLOSING_ISSUES:
+            issues = page_of(self.issues[variables["number"]], variables)
+            return {"repository": {"pullRequest": {"closingIssuesReferences": issues}}}
         threads = page_of(self.threads[variables["number"]], variables)
         return {"repository": {"pullRequest": {"reviewThreads": threads}}}
 
@@ -341,6 +348,12 @@ class OpenPullRequests(unittest.TestCase):
         pr = pull_request(closingIssuesReferences={"nodes": [issue]})
         entry = FakeGitHub(authored=[pr]).open_merge_requests(IssueTasks())[KEY]
         self.assertEqual((entry["task"], entry["task_url"]), ("#12 Login fails", issue["url"]))
+
+    def test_every_issue_the_pull_request_closes_is_counted_past_the_first_ten(self):
+        issues = [{"number": n, "title": f"Issue {n}", "url": f"https://github.com/acme/web/issues/{n}"} for n in range(11)]
+        pr = pull_request(closingIssuesReferences={"pageInfo": {"hasNextPage": True}, "nodes": issues[:10]})
+        entry = FakeGitHub(authored=[pr], issues={7: issues}).open_merge_requests(IssueTasks())[KEY]
+        self.assertEqual(entry["task"], "#0 Issue 0 (+10)")
 
     def test_a_branch_convention_reads_the_head_branch(self):
         tasks = task_source(Config(state_dir=Path("u"), task_source="jira"))

@@ -153,7 +153,7 @@ class GitLab:
         # An issue from an external tracker (Jira) carries a string `id` instead of an `iid`.
         return [
             Issue(f"#{i['iid']}" if i.get("iid") else str(i.get("id", "")), i.get("title", ""), i.get("web_url"))
-            for i in self.api(f"{base}/closes_issues") or []
+            for i in self._pages(f"{base}/closes_issues")
         ]
 
     # ---------- Merges ----------
