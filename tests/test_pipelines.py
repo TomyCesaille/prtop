@@ -54,6 +54,17 @@ class ProductionJobs(unittest.TestCase):
     def test_without_the_canonical_job_any_prod_deploy_job_decides(self):
         self.assertTrue(PROD_JOBS.shipped([job("success", "deploy-prod-eu")]))
 
+    def test_the_job_to_act_on_is_the_one_waiting_to_be_started(self):
+        jobs = [job("success", "deploy-prod-eu", id=1), job("manual", "deploy-prod-us", id=2)]
+        self.assertEqual(PROD_JOBS.to_act_on(jobs)["id"], 2)
+
+    def test_with_no_job_waiting_the_first_production_job_is_the_one_to_act_on(self):
+        jobs = [job("failed", "deploy-prod-eu", id=1), job("running", "deploy-prod-us", id=2)]
+        self.assertEqual(PROD_JOBS.to_act_on(jobs)["id"], 1)
+
+    def test_without_a_production_job_there_is_none_to_act_on(self):
+        self.assertIsNone(PROD_JOBS.to_act_on([job("manual", "test")]))
+
 
 class AfterAMerge(unittest.TestCase):
     def test_a_pipeline_that_shows_up_late_is_waited_for(self):

@@ -50,7 +50,8 @@ tools, one per forge.
   never ran: a branch's history is linear, so a later deploy carries the earlier
   commits. GitLab compares pipeline ids; GitHub asks whether the deployed commit
   contains the merge commit, since a workflow run can start after a later
-  commit's runs. A pipeline that finished with no production job ends the
+  commit's runs, and picks the frontier among the commits of the branch's 20
+  latest runs the same way. A pipeline that finished with no production job ends the
   tracking too (`model.FINISHED`).
 - **`action_needed` counts open merge requests only.** Deploy rows carry `!` marks
   of their own but never turn the tab orange.
@@ -135,12 +136,14 @@ Adding a state means choosing its mark first and its glyph last. The
   whose single sign-on the token lacks hides its pull requests without hiding the
   others.
 - A merged pull request is followed through the GitHub Actions runs of its merge
-  commit on the base branch, read as one pipeline: their jobs, every page of
-  them, are judged together, for the frontier's candidate commits too, since a
-  primary production job and its auxiliaries can run in different workflows.
+  commit on the base branch, read as one pipeline: their jobs are judged
+  together, for the frontier's candidate commits too, since a primary production
+  job and its auxiliaries can run in different workflows. Every page of the runs
+  and of their jobs is read: a scheduled workflow runs on the default branch's
+  latest commit again and again, burying the runs its push started.
   Run and job states are translated into `pipelines.py`'s words; `waiting`, a
   job held by a protected environment's reviewers, is a manual job, and the
-  run's page is where it is approved. A finished run's jobs and a commit
+  page of the run holding it is where it is approved. A finished run's jobs and a commit
   comparison never change, so the forge keeps them for the life of the process.
 - A deploy started by `workflow_run` is created only once the run it waits on is
   over, so runs without a production job end the tracking only five minutes

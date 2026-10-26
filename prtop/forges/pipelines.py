@@ -42,6 +42,13 @@ class ProdJobs:
         prod = [j for j in jobs if self._deploy.search(j.get("name", ""))]
         return [j for j in prod if self._primary.search(j.get("name", ""))] or prod
 
+    def to_act_on(self, jobs: list[dict]) -> dict | None:
+        """The primary prod deploy job to act on: one waiting to be started by
+        hand, else the first. Several match when no job is named as the primary,
+        and one region can have shipped while another waits."""
+        prod = self.primary(jobs)
+        return next((j for j in prod if j.get("status") == "manual"), next(iter(prod), None))
+
     def shipped(self, jobs: list[dict]) -> bool:
         statuses = {j.get("status") for j in self.primary(jobs)}
         return "success" in statuses and statuses <= {"success", "skipped"}

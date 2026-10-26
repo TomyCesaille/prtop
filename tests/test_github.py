@@ -28,7 +28,13 @@ ME = "octocat"
 REPO = "acme/web"
 KEY = f"{REPO}!7"
 PULL = f"repos/{REPO}/pulls/7"
-COMPARE = f"repos/{REPO}/compare/abc...def?per_page=1"
+
+
+def compare(sha, deployed):
+    return f"repos/{REPO}/compare/{sha}...{deployed}?per_page=1"
+
+
+COMPARE = compare("abc", "def")
 
 
 def pull_request(
@@ -75,9 +81,11 @@ def page_of(items, variables, size=100):
     }
 
 
-def runs_for(sha, count=100):
-    query = f"branch=main&per_page={count}&exclude_pull_requests=true"
-    return f"repos/{REPO}/actions/runs?{query}&head_sha={sha}" if sha else f"repos/{REPO}/actions/runs?{query}"
+RECENT_RUNS = f"repos/{REPO}/actions/runs?branch=main&exclude_pull_requests=true&per_page=20"
+
+
+def runs_for(sha, page=1):
+    return f"repos/{REPO}/actions/runs?branch=main&exclude_pull_requests=true&head_sha={sha}&per_page=100&page={page}"
 
 
 def run(id, sha="abc", status="completed", conclusion="success", attempt=1):
@@ -96,8 +104,8 @@ def listing(*runs):
     return {"workflow_runs": list(runs)}
 
 
-def jobs(*items, total=None):
-    return {"jobs": list(items), "total_count": len(items) if total is None else total}
+def jobs(*items):
+    return {"jobs": list(items)}
 
 
 class FakeGitHub(GitHub):
@@ -382,7 +390,7 @@ class Deployments(unittest.TestCase):
         return forge.deploy_states({KEY: self.dep()})[KEY]
 
     def frontier(self, sha="def"):
-        return {runs_for(None, 20): listing(run(9, sha)), runs_for(sha): listing(run(9, sha)), jobs_of(9): jobs(job())}
+        return {RECENT_RUNS: listing(run(9, sha)), runs_for(sha): listing(run(9, sha)), jobs_of(9): jobs(job())}
 
     def own(self, *job_list, **run_fields):
         return {runs_for("abc"): listing(run(5, **run_fields)), jobs_of(5): jobs(*job_list)}
@@ -400,29 +408,29 @@ class Deployments(unittest.TestCase):
         rest = {**self.frontier(), COMPARE: {"status": "behind"},
                 **self.own(job(status="waiting"), status="waiting", conclusion=None)}
         dep = self.dep()
-        state = FakeGitHub(rest).deploy_states({"web!7": dep})["web!7"]
+        state = FakeGitHub(rest).deploy_states({KEY: dep})[KEY]
         self.assertEqual(state.kind, model.AWAITING_TRIGGER)
         self.assertEqual(state.url, f"https://github.com/{REPO}/actions/runs/5")
         self.assertEqual(dep["prod_run_id"], 5)
 
     def test_its_own_successful_deploy_ships_it_when_no_frontier_is_found(self):
-        rest = {runs_for(None, 20): listing(), **self.own(job())}
+        rest = {RECENT_RUNS: listing(), **self.own(job())}
         self.assertEqual(self.state(rest).kind, model.SHIPPED)
 
     def test_a_run_still_going_is_a_pipeline_in_flight(self):
-        rest = {runs_for(None, 20): listing(), **self.own(job(status="in_progress"), status="in_progress")}
+        rest = {RECENT_RUNS: listing(), **self.own(job(status="in_progress"), status="in_progress")}
         self.assertEqual(self.state(rest), model.DeployState(model.PIPELINE_RUNNING, "running"))
 
     def test_a_failed_run_is_a_failed_pipeline(self):
-        rest = {runs_for(None, 20): listing(), **self.own(job("test", conclusion="failure"), conclusion="failure")}
+        rest = {RECENT_RUNS: listing(), **self.own(job("test", conclusion="failure"), conclusion="failure")}
         self.assertEqual(self.state(rest).kind, model.PIPELINE_FAILED)
 
     def test_runs_without_a_production_job_end_the_tracking(self):
-        rest = {runs_for(None, 20): listing(), **self.own(job("test"))}
+        rest = {RECENT_RUNS: listing(), **self.own(job("test"))}
         self.assertIn(self.state(rest).kind, model.FINISHED)
 
     def test_a_check_that_gets_no_answer_says_so_on_its_own_row(self):
-        self.assertEqual(self.state({runs_for(None, 20): listing()}).kind, model.CHECK_FAILED)
+        self.assertEqual(self.state({RECENT_RUNS: listing()}).kind, model.CHECK_FAILED)
 
     def test_a_finished_runs_jobs_and_a_comparison_are_asked_for_once(self):
         rest = {**self.frontier(), COMPARE: {"status": "diverged"}, **self.own(job("test"))}
@@ -433,7 +441,7 @@ class Deployments(unittest.TestCase):
         self.assertEqual(forge.calls.count(COMPARE), 1)
 
     def test_a_running_runs_jobs_are_asked_for_again(self):
-        rest = {runs_for(None, 20): listing(), **self.own(job(status="queued"), status="queued")}
+        rest = {RECENT_RUNS: listing(), **self.own(job(status="queued"), status="queued")}
         forge = FakeGitHub(rest)
         for _ in range(2):
             self.assertEqual(self.state({}, forge), model.DeployState(model.PIPELINE_RUNNING, "pending"))
@@ -441,19 +449,35 @@ class Deployments(unittest.TestCase):
 
     def test_the_frontier_is_the_newest_commit_that_shipped(self):
         rest = {
-            runs_for(None, 20): listing(run(8, "old"), run(10, "new", status="in_progress"), run(9, "def")),
+            RECENT_RUNS: listing(run(8, "old"), run(10, "new", status="in_progress"), run(9, "def")),
             runs_for("new"): listing(run(10, "new", status="in_progress")),
             jobs_of(10): jobs(job(status="in_progress")),
             runs_for("def"): listing(run(9, "def")),
             jobs_of(9): jobs(job()),
+            compare("old", "def"): {"status": "ahead"},
             COMPARE: {"status": "identical"},
+        }
+        forge = FakeGitHub(rest)
+        self.assertEqual(self.state({}, forge).kind, model.SHIPPED)
+        self.assertNotIn(runs_for("old"), forge.calls)
+
+    def test_a_late_run_of_an_older_deploy_does_not_hide_a_newer_one(self):
+        rest = {
+            RECENT_RUNS: listing(run(12, "old"), run(11, "def"), run(10, "old")),
+            runs_for("old"): listing(run(12, "old"), run(10, "old")),
+            jobs_of(12): jobs(job("lint")),
+            jobs_of(10): jobs(job()),
+            compare("def", "old"): {"status": "behind"},
+            runs_for("def"): listing(run(11, "def")),
+            jobs_of(11): jobs(job()),
+            COMPARE: {"status": "ahead"},
         }
         self.assertEqual(self.state(rest).kind, model.SHIPPED)
 
     def test_an_auxiliary_deploy_in_another_workflow_does_not_pass_for_the_app_shipping(self):
         workflows = listing(run(5, status="waiting", conclusion=None), run(6))
         rest = {
-            runs_for(None, 20): workflows,
+            RECENT_RUNS: workflows,
             runs_for("abc"): workflows,
             jobs_of(5): jobs(job(status="waiting")),
             jobs_of(6): jobs(job("deploy-production-heavy-duty")),
@@ -463,17 +487,49 @@ class Deployments(unittest.TestCase):
     def test_a_production_job_past_the_first_hundred_jobs_is_found(self):
         tests = [job(f"test {n}", id=n) for n in range(100)]
         rest = {
-            runs_for(None, 20): listing(),
+            RECENT_RUNS: listing(),
             runs_for("abc"): listing(run(5)),
-            jobs_of(5): jobs(*tests, total=101),
-            jobs_of(5, page=2): jobs(job(), total=101),
+            jobs_of(5): jobs(*tests),
+            jobs_of(5, page=2): jobs(job()),
         }
         self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_a_listing_is_read_ten_pages_deep_at_most(self):
+        full = jobs(*(job(f"test {n}", id=n) for n in range(100)))
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(run(5)),
+                **{jobs_of(5, page=page): full for page in range(1, 12)}}
+        forge = FakeGitHub(rest)
+        self.state({}, forge)
+        self.assertIn(jobs_of(5, page=10), forge.calls)
+        self.assertNotIn(jobs_of(5, page=11), forge.calls)
+
+    def test_a_deploy_buried_under_a_hundred_scheduled_runs_is_found(self):
+        scheduled = [run(100 + n) for n in range(100)]
+        rest = {
+            RECENT_RUNS: listing(),
+            runs_for("abc"): listing(*scheduled),
+            runs_for("abc", page=2): listing(run(5, status="waiting", conclusion=None)),
+            jobs_of(5): jobs(job(status="waiting")),
+            **{jobs_of(r["id"]): jobs(job("nightly checks")) for r in scheduled},
+        }
+        self.assertEqual(self.state(rest).kind, model.AWAITING_TRIGGER)
+
+    def test_the_approval_link_leads_to_the_run_whose_production_job_waits(self):
+        rest = {
+            RECENT_RUNS: listing(),
+            runs_for("abc"): listing(run(5), run(6, status="waiting", conclusion=None)),
+            jobs_of(5): jobs(job("deploy-prod-eu")),
+            jobs_of(6): jobs(job("deploy-prod-us", status="waiting", id=2)),
+        }
+        dep = self.dep()
+        state = FakeGitHub(rest).deploy_states({KEY: dep})[KEY]
+        self.assertEqual(state.url, f"https://github.com/{REPO}/actions/runs/6")
+        self.assertEqual(dep["prod_run_id"], 6)
 
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)
         finished["updated_at"] = "2026-10-23T18:00:00Z"
-        rest = {runs_for(None, 20): listing(), runs_for("abc"): listing(finished), jobs_of(5): jobs(job("test"))}
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(finished), jobs_of(5): jobs(job("test"))}
         at = datetime(2026, 10, 23, 18, 0, tzinfo=UTC)
         for minutes, kind in ((4, model.PIPELINE_RUNNING), (5, model.NO_PROD_JOB)):
             with self.subTest(minutes):

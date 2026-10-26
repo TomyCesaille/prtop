@@ -198,6 +198,11 @@ def actions_status(item: dict) -> str:
 DOWNSTREAM_GRACE = timedelta(minutes=5)
 
 
+def runs_on(repo: str, ref: str) -> str:
+    """The listing of a branch's workflow runs, newest first."""
+    return f"repos/{repo}/actions/runs?branch={quote(ref, safe='')}&exclude_pull_requests=true"
+
+
 def last_update(runs: list[dict]) -> datetime | None:
     return max((datetime.fromisoformat(run["updated_at"]) for run in runs if run.get("updated_at")), default=None)
 
@@ -334,7 +339,7 @@ class GitHub:
             return None
         ref, sha = (pull.get("base") or {}).get("ref") or "main", pull.get("merge_commit_sha")
         # Without a workflow run for the merge commit, nothing could deploy it.
-        if not sha or not after_merge(lambda: self._runs(repo, ref, sha) or None, self._sleep):
+        if not sha or not after_merge(lambda: self._commit_runs(repo, ref, sha) or None, self._sleep):
             return None
         return {
             "title": entry.get("title", ""),
@@ -347,11 +352,21 @@ class GitHub:
             "sha": sha,
         }
 
-    def _runs(self, repo: str, ref: str, sha: str | None = None, count: int = 100) -> list[dict]:
-        query = f"branch={quote(ref, safe='')}&per_page={count}&exclude_pull_requests=true"
-        if sha:
-            query += f"&head_sha={sha}"
-        return (self.api(f"repos/{repo}/actions/runs?{query}") or {}).get("workflow_runs") or []
+    def _listing(self, path: str, field: str) -> list[dict]:
+        """Every item of a REST listing, up to ten pages of a hundred."""
+        items: list[dict] = []
+        for page in range(1, 11):
+            batch = (self.api(f"{path}&per_page=100&page={page}") or {}).get(field) or []
+            items += batch
+            if len(batch) < 100:
+                break
+        return items
+
+    def _commit_runs(self, repo: str, ref: str, sha: str) -> list[dict]:
+        """A commit's runs on the branch, past the first page: a scheduled
+        workflow runs on the default branch's latest commit again and again, and
+        buries the runs its push started."""
+        return self._listing(f"{runs_on(repo, ref)}&head_sha={sha}", "workflow_runs")
 
     # ---------- Deployments ----------
 
@@ -368,20 +383,10 @@ class GitHub:
         key = (run["id"], run.get("run_attempt", 1))
         if key in self._finished_jobs:
             return self._finished_jobs[key]
-        jobs: list[dict] = []
-        page = 1
-        while True:
-            listing = self.api(
-                f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100&page={page}"
-            ) or {}
-            batch = listing.get("jobs") or []
-            jobs += [
-                {"id": job["id"], "name": job.get("name", ""), "status": actions_status(job), "run_id": run["id"]}
-                for job in batch
-            ]
-            if not batch or len(jobs) >= listing.get("total_count", 0):
-                break
-            page += 1
+        jobs = [
+            {"id": job["id"], "name": job.get("name", ""), "status": actions_status(job), "run_id": run["id"]}
+            for job in self._listing(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest", "jobs")
+        ]
         if run.get("status") == "completed":
             self._finished_jobs[key] = jobs
         return jobs
@@ -389,17 +394,24 @@ class GitHub:
     def _commit(self, repo: str, ref: str, sha: str) -> tuple[list[dict], list[dict]]:
         """A commit's runs on the branch, and all their jobs together: a primary
         production job and its auxiliaries can run in different workflows."""
-        runs = self._runs(repo, ref, sha)
+        runs = self._commit_runs(repo, ref, sha)
         return runs, [job for run in runs for job in self._jobs(repo, run)]
 
     def _frontier(self, repo: str, ref: str) -> str | None:
-        """The newest commit among the branch's recent runs whose primary
-        production deploy succeeded. None when none of them shipped."""
-        recent = sorted(self._runs(repo, ref, count=20), key=lambda r: r["id"], reverse=True)
-        for sha in dict.fromkeys(run["head_sha"] for run in recent):
+        """The newest commit among the branch's twenty latest runs whose primary
+        production deploy succeeded. None when none of them shipped.
+
+        Newest by ancestry: run ids only roughly follow commit order (see
+        `_contains`), so the commits are checked newest run first, and each one
+        the frontier found so far does not carry is checked too."""
+        recent = (self.api(f"{runs_on(repo, ref)}&per_page=20") or {}).get("workflow_runs") or []
+        frontier = None
+        for sha in dict.fromkeys(run["head_sha"] for run in sorted(recent, key=lambda r: r["id"], reverse=True)):
+            if frontier is not None and self._contains(repo, frontier, sha):
+                continue
             if self.prod_jobs.shipped(self._commit(repo, ref, sha)[1]):
-                return sha
-        return None
+                frontier = sha
+        return frontier
 
     def _contains(self, repo: str, deployed: str, sha: str) -> bool:
         """Whether the deployed commit carries `sha`. Unlike pipeline ids on
@@ -422,10 +434,10 @@ class GitHub:
         if self.prod_jobs.shipped(jobs):
             return DeployState(model.SHIPPED)
         trigger_url = ""
-        if prod := self.prod_jobs.primary(jobs):
-            dep["prod_run_id"] = prod[0]["run_id"]
+        if prod := self.prod_jobs.to_act_on(jobs):
+            dep["prod_run_id"] = prod["run_id"]
             # The run's page is where a job waiting on an environment's reviewers is approved.
-            trigger_url = f"https://{HOST}/{repo}/actions/runs/{prod[0]['run_id']}"
+            trigger_url = f"https://{HOST}/{repo}/actions/runs/{prod['run_id']}"
         state = classify_pending(pipeline_status(runs), jobs, self.prod_jobs, trigger_url)
         finished = last_update(runs)
         if state.kind == model.NO_PROD_JOB and finished and self._now() - finished < DOWNSTREAM_GRACE:

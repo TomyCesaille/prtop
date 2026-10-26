@@ -234,8 +234,8 @@ class GitLab:
         # Safety net for a prod deploy that fell outside the frontier's window.
         if self.prod_jobs.shipped(jobs):
             return DeployState(model.SHIPPED)
-        if prod := self.prod_jobs.primary(jobs):
-            dep["prod_job_id"] = prod[0]["id"]
+        if prod := self.prod_jobs.to_act_on(jobs):
+            dep["prod_job_id"] = prod["id"]
         # The branch's commits page is where a manual production job is triggered from.
         commits_url = f"https://{self.host}/{dep['project_path']}/-/commits/{dep['ref']}?ref_type=HEADS"
         return classify_pending(dep["pipeline_status"], jobs, self.prod_jobs, commits_url)
