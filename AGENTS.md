@@ -146,8 +146,10 @@ Adding a state means choosing its mark first and its glyph last. The
   page of the run holding it is where it is approved. A finished run's jobs and a commit
   comparison never change, so the forge keeps them for the life of the process.
 - A deploy started by `workflow_run` is created only once the run it waits on is
-  over, so runs without a production job end the tracking only five minutes
-  (`DOWNSTREAM_GRACE`) after the last of them finished.
+  over, so runs without a production job end the tracking only once all of them
+  finished, and five minutes (`DOWNSTREAM_GRACE`) after the last one did. A run
+  held on a non-production environment's reviewers reads as `pipeline waiting`
+  until then.
 
 ## State file
 

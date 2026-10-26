@@ -439,7 +439,13 @@ class GitHub:
             # The run's page is where a job waiting on an environment's reviewers is approved.
             trigger_url = f"https://{HOST}/{repo}/actions/runs/{prod['run_id']}"
         state = classify_pending(pipeline_status(runs), jobs, self.prod_jobs, trigger_url)
+        if state.kind != model.NO_PROD_JOB:
+            return state
+        # A run held on a non-production environment's reviewers can still lead
+        # to production once approved.
+        if any(run.get("status") != "completed" for run in runs):
+            return DeployState(model.PIPELINE_RUNNING, "waiting")
         finished = last_update(runs)
-        if state.kind == model.NO_PROD_JOB and finished and self._now() - finished < DOWNSTREAM_GRACE:
+        if finished and self._now() - finished < DOWNSTREAM_GRACE:
             return DeployState(model.PIPELINE_RUNNING, "pending")
         return state

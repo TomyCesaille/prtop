@@ -156,7 +156,8 @@ request.
 - A merged pull request is followed through the GitHub Actions runs of its merge
   commit, and the production job is found by the same patterns. A job waiting on
   a protected environment's reviewers reads as `awaiting prod trigger`, linked to
-  the run where it is approved.
+  the run where it is approved; a run held on another environment's reviewers
+  reads as `pipeline waiting`.
 
 ## With an AI agent
 

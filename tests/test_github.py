@@ -526,6 +526,14 @@ class Deployments(unittest.TestCase):
         self.assertEqual(state.url, f"https://github.com/{REPO}/actions/runs/6")
         self.assertEqual(dep["prod_run_id"], 6)
 
+    def test_a_run_held_on_a_staging_approval_keeps_the_merge_tracked(self):
+        held = run(5, status="waiting", conclusion=None)
+        held["updated_at"] = "2026-10-23T18:00:00Z"
+        rest = {RECENT_RUNS: listing(), runs_for("abc"): listing(held),
+                jobs_of(5): jobs(job("deploy-staging", status="waiting"))}
+        forge = FakeGitHub(rest, now=lambda: datetime(2026, 10, 24, 18, 0, tzinfo=UTC))
+        self.assertEqual(self.state({}, forge), model.DeployState(model.PIPELINE_RUNNING, "waiting"))
+
     def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
         finished = run(5)
         finished["updated_at"] = "2026-10-23T18:00:00Z"
