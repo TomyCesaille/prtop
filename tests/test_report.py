@@ -6,7 +6,7 @@ from pathlib import Path
 
 from prtop import model
 from prtop.config import Config
-from prtop.forges.gitlab import PIPELINE_INFLIGHT, PROD_DEPLOYING, ProdJobs, classify_pending
+from prtop.forges.pipelines import PIPELINE_INFLIGHT, PROD_DEPLOYING, ProdJobs, classify_pending
 from prtop.model import DeployState
 from prtop.report import (
     ACT,
@@ -39,7 +39,7 @@ from prtop.report import (
 HOST = "gitlab.example.com"
 WIDEST_STATUS = "🔍 merge check running, unapproved"
 
-_defaults = Config(state_file=Path("unused"))
+_defaults = Config(state_dir=Path("unused"))
 PROD_JOBS = ProdJobs(_defaults.deploy_job_pattern, _defaults.primary_deploy_job_pattern)
 PIPELINE_STATES = PIPELINE_INFLIGHT | {"failed", "success", "canceled", "skipped", "manual"}
 JOB_STATES = PROD_DEPLOYING | {"failed", "success", "canceled", "skipped", "manual", "created"}
@@ -176,6 +176,11 @@ class UnreachableInstance(unittest.TestCase):
     def test_it_leads_the_deploy_rows_the_run_could_still_read(self):
         rows = by_severity([row(PEOPLE, pr="`frontend!7`"), unreachable_row(HOST)])
         self.assertEqual(rows[0].title, HOST)
+
+    def test_the_row_links_to_the_instance_and_reads_as_a_dash(self):
+        r = unreachable_row(HOST)
+        self.assertEqual(plain(r.pr), "—")
+        self.assertIn(f"https://{HOST}", r.pr)
 
     def test_a_row_with_no_mr_number_still_sorts(self):
         rows = by_severity([row(ACT, pr="`frontend!7`"), unreachable_row(HOST)])

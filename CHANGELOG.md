@@ -6,6 +6,28 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+### Added
+
+- GitHub: the open pull requests you opened or are assigned to on github.com,
+  read through `gh`, alone (`PRTOP_FORGES=github`) or in one table with a GitLab
+  instance's merge requests (`PRTOP_FORGES=gitlab,github`). They read like merge
+  requests, `repo!number` linked to the pull request. `PRTOP_GITHUB_OWNER` limits
+  them to one organization or user.
+- Merged pull requests followed to production through the GitHub Actions runs of
+  their merge commit, with the same deploy job patterns. A job waiting on a
+  protected environment's reviewers reads as awaiting prod trigger, linked to its
+  run.
+
+### Changed
+
+- `PRTOP_STATE_DIR` replaces `PRTOP_STATE_FILE`: each forge keeps its
+  `<host>.json` there. The default location does not move.
+- The state file keys a merge request by its full path, `acme/web!7`, where the
+  PR column shows `web!7`.
+- The Chocolatey package installs `gh` alongside `glab`.
+
 ## [0.1.0] - 2026-10-23
 
 The first release.
@@ -30,5 +52,6 @@ The first release.
 - `--demo`, the table for made-up merge requests.
 - An iTerm2 tab colour, off unless `PRTOP_ITERM_TAB_COLOR` turns it on.
 
-[Unreleased]: https://github.com/TomyCesaille/prtop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TomyCesaille/prtop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TomyCesaille/prtop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TomyCesaille/prtop/releases/tag/v0.1.0

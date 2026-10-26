@@ -15,7 +15,7 @@ def no_issues():
 
 
 def source(**settings):
-    return task_source(Config(state_file=Path("unused"), **settings))
+    return task_source(Config(state_dir=Path("unused"), **settings))
 
 
 class NotionBranches(unittest.TestCase):
@@ -81,6 +81,11 @@ class Issues(unittest.TestCase):
 
     def test_an_mr_closing_no_issue_has_no_task(self):
         self.assertIsNone(IssueTasks().resolve(None, list))
+
+
+class IssueSource(unittest.TestCase):
+    def test_the_issues_setting_reads_the_issues_an_mr_closes(self):
+        self.assertIsInstance(source(task_source="issues"), IssueTasks)
 
 
 class NoSource(unittest.TestCase):

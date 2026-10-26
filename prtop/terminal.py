@@ -3,25 +3,21 @@ takes it, and keys read as they are pressed, on macOS, Linux and Windows.
 
 Only the standard library: Python on Windows ships without `curses`, so the
 screen is drawn with escape sequences, which Windows Terminal and the Windows
-console both read once virtual terminal processing is on.
+console both read once virtual terminal processing is on. The modules that
+exist on one platform only (`termios`, `tty`, `msvcrt`) are imported where
+they are used.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import select
 import shutil
 import signal
 import sys
 import time
 from typing import Self
-
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import os
-    import select
-    import termios
-    import tty
 
 ENTER = "\033[?1049h\033[?25l"  # the alternate screen, with the cursor hidden
 LEAVE = "\033[?25h\033[?1049l"
@@ -93,6 +89,9 @@ def _exit_on(signum: int, frame: object) -> None:
 
 class _PosixTerminal(_Screen):
     def __enter__(self) -> Self:
+        import termios
+        import tty
+
         self._fd = sys.stdin.fileno()
         self._modes = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
@@ -101,6 +100,8 @@ class _PosixTerminal(_Screen):
         return self
 
     def __exit__(self, *exc: object) -> None:
+        import termios
+
         self._write(LEAVE)
         signal.signal(signal.SIGTERM, self._on_term)
         termios.tcsetattr(self._fd, termios.TCSADRAIN, self._modes)
@@ -135,6 +136,8 @@ class _WindowsTerminal(_Screen):
             self._kernel32.SetConsoleMode(self._console, self._mode)
 
     def read_keys(self, timeout: float) -> list[str]:
+        import msvcrt
+
         deadline = time.monotonic() + timeout
         while not msvcrt.kbhit():
             if time.monotonic() >= deadline:
@@ -152,7 +155,7 @@ class _WindowsTerminal(_Screen):
         return keys
 
 
-def fullscreen() -> _PosixTerminal | _WindowsTerminal:
+def fullscreen(platform: str = sys.platform) -> _PosixTerminal | _WindowsTerminal:
     """The terminal, to hold in a `with` block: the screen is given back, and
     the keyboard's usual modes restored, however the block ends."""
-    return _WindowsTerminal() if sys.platform == "win32" else _PosixTerminal()
+    return _WindowsTerminal() if platform == "win32" else _PosixTerminal()

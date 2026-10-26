@@ -6,11 +6,34 @@ never learns which service it is reading.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from typing import NamedTuple
 
 
 class ForgeError(RuntimeError):
     """The forge did not answer, or answered something unreadable."""
+
+
+def mr_key(project_path: str, number: int) -> str:
+    """A merge request's key in the state file, `acme/web!7`: the same merge
+    request from one run to the next, whatever else is open beside it."""
+    return f"{project_path}!{number}"
+
+
+def short_ids(keys: Iterable[str]) -> dict[str, str]:
+    """The `repo!number` the PR column shows for each `mr_key`, the same on every
+    forge: the cell links to the merge request, which says where it lives. Where
+    two repositories of the same name would collide, both show their full path,
+    `acme/web!7` beside `labs/web!7`."""
+
+    def short(key: str) -> str:
+        path, _, number = key.rpartition("!")
+        return f"{path.rsplit('/', 1)[-1]}!{number}"
+
+    keys = set(keys)
+    taken = Counter(map(short, keys))
+    return {key: short(key) if taken[short(key)] == 1 else key for key in keys}
 
 
 # Review states of an open merge request. A state the forge cannot map passes

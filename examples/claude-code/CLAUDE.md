@@ -7,11 +7,11 @@ minutes and exits as soon as the table changes, which wakes you. When it exits:
 - with a new table: look at the rows of this task's merge requests, tell me what
   moved, act as `/prs` says, and start `prtop watch` again;
 - with `TIMEOUT after …`: start it again without a word;
-- with `[watch] check failed`, or an `instance unreachable` row: GitLab did not
-  answer. Check the merge request yourself, then start the watch again.
+- with `[watch] check failed`, or an `instance unreachable` row: GitLab or GitHub
+  did not answer. Check the merge request yourself, then start the watch again.
 
-The table lists every merge request assigned to me. Say nothing about the others
-unless I ask. Keep watching until this task's merge requests are merged and in
+The table lists every merge request and pull request of mine. Say nothing about
+the others unless I ask. Keep watching until this task's merge requests are merged and in
 production, or until I say stop.
 
 If `prtop` is already open in a terminal of mine, it fetches every 30 seconds;

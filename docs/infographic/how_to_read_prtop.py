@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from prtop.demo import demo_story
+from prtop.demo import TITLE, demo_story
 from prtop.live import NOT_REVERSE, REVERSE, Outcome, View
 from prtop.report import DEPLOY_SIGNAL, display_width, plain
 
@@ -42,7 +42,7 @@ def live_view() -> list[str]:
     """The demo's live view after its first change, with the top line's times fixed."""
     fetch = demo_story(pause=lambda seconds: None)
     first, second = fetch(), fetch()
-    view = View("gitlab.example.com")
+    view = View(TITLE)
     view.take(Outcome(first, []), datetime(2026, 10, 23, 14, 4, 10))
     view.take(Outcome(second, []), datetime(2026, 10, 23, 14, 4, 40))
     view.take(Outcome(second, []), datetime(2026, 10, 23, 14, 5, 12))

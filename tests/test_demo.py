@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from prtop.cli import main
-from prtop.demo import demo_report, demo_story
+from prtop.demo import OPEN_MRS, TITLE, demo_report, demo_story
 from prtop.report import MARK_ORDER, plain
 
 
@@ -37,6 +37,10 @@ class Demo(unittest.TestCase):
         for _ in range(3):
             fetch()
         self.assertEqual(len(pauses), 2)
+
+    def test_it_reads_a_gitlab_instance_and_github_together(self):
+        self.assertEqual(TITLE, "gitlab.example.com + github.com")
+        self.assertIn("https://github.com/acme/worker/pull/812", {mr["web_url"] for mr in OPEN_MRS.values()})
 
     def test_it_runs_without_any_configuration(self):
         out = io.StringIO()

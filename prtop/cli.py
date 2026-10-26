@@ -19,8 +19,9 @@ from datetime import datetime
 
 from prtop import __version__, live, model
 from prtop.config import Config, ConfigError, load_config
+from prtop.demo import TITLE as DEMO_TITLE
 from prtop.demo import demo_story
-from prtop.forges import Forge, make_forge
+from prtop.forges import Forge, make_forges
 from prtop.model import ForgeError
 from prtop.report import (
     ACT,
@@ -30,7 +31,6 @@ from prtop.report import (
     by_severity,
     deploy_row,
     open_row,
-    plain,
     unreachable_row,
 )
 from prtop.state import load_state, save_state
@@ -60,18 +60,19 @@ def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict)
     return unconfirmed
 
 
-def deployment_rows(forge: Forge, deployments: dict) -> list[Row]:
-    rows = []
-    for key, state in forge.deploy_states(deployments).items():
+def unfinished_deployments(forge: Forge, deployments: dict) -> dict[str, model.DeployState]:
+    """Where each tracked deployment stands; the ones that finished stop being tracked."""
+    states = forge.deploy_states(deployments)
+    for key, state in states.items():
         if state.kind in model.FINISHED:
             deployments.pop(key)
-        else:
-            rows.append(deploy_row(key, deployments[key], state))
-    return by_severity(rows)
+    return {key: state for key, state in states.items() if key in deployments}
 
 
-def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
-    state = load_state(config.state_file)
+def check_forge(config: Config, forge: Forge, tasks: TaskSource) -> tuple[list[Row], list[Row]]:
+    """One forge's open rows and deploy rows, against its own state file."""
+    state_file = config.state_file(forge.host)
+    state = load_state(state_file)
     previous = state.get("open_mrs") or {}
     deployments = state.setdefault("deployments", {})
 
@@ -91,12 +92,26 @@ def run_check(config: Config, forge: Forge, tasks: TaskSource) -> Report:
         known = {**known, **track_merges(forge, known, previous, deployments)}
     state["open_mrs"] = known
 
+    deploy_states = unfinished_deployments(forge, deployments) if config.deploy_tracking else {}
+    ids = model.short_ids([*open_mrs, *deploy_states])
     open_rows = (
         [unreachable_row(forge.host)] if error is not None
-        else by_severity([open_row(key, entry) for key, entry in open_mrs.items()])
+        else [open_row(ids[key], entry) for key, entry in open_mrs.items()]
     )
-    deploy_rows = deployment_rows(forge, deployments) if config.deploy_tracking else []
-    save_state(config.state_file, state)
+    deploy_rows = [deploy_row(ids[key], deployments[key], state) for key, state in deploy_states.items()]
+    save_state(state_file, state)
+    return open_rows, deploy_rows
+
+
+def run_check(config: Config, forges: list[Forge], tasks: TaskSource) -> Report:
+    """One table for every forge: their rows sort together, by mark first."""
+    open_rows: list[Row] = []
+    deploy_rows: list[Row] = []
+    for forge in forges:
+        forge_open, forge_deploy = check_forge(config, forge, tasks)
+        open_rows += forge_open
+        deploy_rows += forge_deploy
+    open_rows, deploy_rows = by_severity(open_rows), by_severity(deploy_rows)
 
     # A forge the run could not read counts too: its row is marked `!`, since
     # green would otherwise claim all-clear over MRs nobody saw.
@@ -177,7 +192,7 @@ def show_live(
 
 def watch(
     config: Config,
-    forge: Forge,
+    forges: list[Forge],
     tasks: TaskSource,
     delay: int,
     cap: int,
@@ -196,15 +211,16 @@ def watch(
     baseline = None
     while True:
         try:
-            report = run_check(config, forge, tasks)
+            report = run_check(config, forges, tasks)
         except ForgeError as e:
             print(f"prtop: {e}", file=sys.stderr)
             print("[watch] check failed", flush=True)
             return 1
-        if baseline is not None and plain(report.text) != baseline:
+        # Links included: they tell two forges' identical PR ids apart.
+        if baseline is not None and report.text != baseline:
             print(report.text, flush=True)
             return 0
-        baseline = plain(report.text)
+        baseline = report.text
         print(f"[watch] {datetime.now():%H:%M:%S} no change", flush=True)
         if clock() - started >= cap:
             print(f"TIMEOUT after {cap}s with no PR activity", flush=True)
@@ -231,9 +247,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="prtop",
         description=(
-            "The merge requests assigned to you, from review to production. In a terminal "
-            "prtop fills the screen and fetches again every few seconds, like htop; "
-            "anywhere else it prints one table."
+            "Your GitLab merge requests and GitHub pull requests, from review to production. "
+            "In a terminal prtop fills the screen and fetches again every few seconds, like "
+            "htop; anywhere else it prints one table."
         ),
         epilog="keys: q quit, h help, Ctrl+L fetch now, Z pause or resume",
     )
@@ -281,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     on_report = None
     if args.demo:
-        fetch, title = demo_story(), "demo"
+        fetch, title = demo_story(), DEMO_TITLE
     else:
         try:
             config = load_config()
@@ -289,14 +305,14 @@ def main(argv: list[str] | None = None) -> int:
         except ConfigError as e:
             print(f"prtop: {e}", file=sys.stderr)
             return 2
-        forge = make_forge(config)
+        forges = make_forges(config)
         if args.command == "watch":
-            return watch(config, forge, tasks, args.delay, args.cap)
+            return watch(config, forges, tasks, args.delay, args.cap)
 
         def fetch() -> Report:
-            return run_check(config, forge, tasks)
+            return run_check(config, forges, tasks)
 
-        title, on_report = forge.host, tab_color_hook(config)
+        title, on_report = " + ".join(forge.host for forge in forges), tab_color_hook(config)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         return show_live(fetch, title, args.delay, args.max_iterations, on_report)

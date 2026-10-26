@@ -1,14 +1,16 @@
 """The boundary between prtop and a code-hosting service.
 
 A forge owns every call to its service and every field name of its API, and
-hands the rest of prtop plain dicts in the vocabulary of `prtop.model`.
+hands the rest of prtop plain dicts in the vocabulary of `prtop.model`. One
+GitLab instance and github.com can be read together; each keeps its own state.
 
 Adding a forge means implementing `Forge` in a module of this package and
-registering it in `make_forge` and in the `FORGE` setting.
+registering it in `make_forges` and in `prtop.config.FORGES`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from prtop.config import Config
@@ -17,11 +19,11 @@ from prtop.tasks import TaskSource
 
 
 class Forge(Protocol):
-    # Names the instance in the report when it does not answer.
+    # Names the instance in the report when it does not answer, and its state file.
     host: str
 
     def open_merge_requests(self, tasks: TaskSource) -> dict[str, dict]:
-        """Every open MR assigned to you, keyed by the `repo!iid` the table shows.
+        """Every open MR of yours, keyed by `model.mr_key`.
 
         Each entry carries `title`, `task` and `task_url` (from `tasks`),
         `status` (a review state of `prtop.model`), `fully_approved`,
@@ -46,7 +48,9 @@ class Forge(Protocol):
         ...
 
 
-def make_forge(config: Config) -> Forge:
+def make_forges(config: Config) -> list[Forge]:
+    from prtop.forges.github import GitHub
     from prtop.forges.gitlab import GitLab
 
-    return GitLab(config)
+    makers: dict[str, Callable[[Config], Forge]] = {"gitlab": GitLab, "github": GitHub}
+    return [makers[name](config) for name in config.forges]

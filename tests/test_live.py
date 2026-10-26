@@ -11,7 +11,17 @@ from datetime import datetime, timedelta
 from prtop import live
 from prtop.live import REVERSE, Fetcher, Messages, fit
 from prtop.model import ForgeError
-from prtop.report import ACT, PEOPLE, TITLE_MAX, Report, Row, display_width
+from prtop.report import (
+    ACT,
+    NOTHING_OPEN,
+    PEOPLE,
+    TITLE_MAX,
+    Report,
+    Row,
+    display_width,
+    hyperlink,
+    unreachable_row,
+)
 
 STARTED = datetime(2026, 10, 21, 14, 0, 0)
 
@@ -170,6 +180,39 @@ class LiveView(unittest.TestCase):
         self.assertFalse(unchanged[0].startswith(REVERSE))
         self.assertIn("last change 14:00:30", lines[0])
 
+    def test_the_same_mr_id_on_two_forges_changes_on_its_own(self):
+        def on(forge, status="👀 awaiting review", mark=PEOPLE):
+            return row(1, status, mark)._replace(pr=hyperlink("`web!1`", f"https://{forge}/web/1"))
+
+        self.reports = [
+            report(on("gitlab.example.com"), on("github.com")),
+            report(on("gitlab.example.com"), on("github.com", "✅ mergeable, approved", ACT)),
+        ]
+        self.run_view(keys=[(40, "q")])
+        highlighted = [line for line in self.terminal.frames[-1] if line.startswith(REVERSE)]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("mergeable", highlighted[0])
+
+    def test_a_second_forge_going_unreachable_changes_on_its_own(self):
+        self.reports = [
+            report(unreachable_row("github.com"), row(1)),
+            report(unreachable_row("github.com"), unreachable_row("gitlab.example.com")),
+        ]
+        self.run_view(keys=[(40, "q")])
+        highlighted = [line for line in self.terminal.frames[-1] if line.startswith(REVERSE)]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("gitlab.example.com", highlighted[0])
+
+    def test_nothing_open_says_so_in_place_of_the_table(self):
+        self.reports = [report()]
+        self.run_view(keys=[(1, "q")])
+        self.assertEqual(self.last_frame()[2], NOTHING_OPEN)
+
+    def test_a_key_prtop_has_no_use_for_changes_nothing(self):
+        view = self.run_view(keys=[(1, "x"), (2, "q")])
+        self.assertEqual((len(self.fetched_at), view.help, view.paused, self.terminal.cleared), (1, False, False, 0))
+        self.assertIn("feat: change 1", "\n".join(self.last_frame()))
+
     def test_the_first_table_has_nothing_in_reverse_video(self):
         self.run_view(keys=[(1, "q")])
         self.assertFalse(any(REVERSE in line for line in self.terminal.frames[-1]))
@@ -203,9 +246,23 @@ class Fitting(unittest.TestCase):
         self.assertLessEqual(max(map(display_width, lines)), 130)
         self.assertIn(title, lines[2])
 
+    def test_a_window_too_narrow_for_the_narrowest_columns_cuts_every_line_at_its_edge(self):
+        lines = fit(report(row(1, title="x" * 80, task="y" * 80)), 50)
+        self.assertEqual({display_width(line) for line in lines}, {50})
+        self.assertTrue(all(line.endswith("…") for line in lines))
+
     def test_a_table_that_fits_is_left_whole(self):
         table = report(row(1))
         self.assertEqual(fit(table, 300), table.text.splitlines())
+
+
+class Messages_(unittest.TestCase):
+    def test_messages_stand_in_for_stderr_line_by_line(self):
+        messages = Messages()
+        self.assertTrue(messages.writable())
+        print("prtop: one\n\nprtop: two", file=messages)
+        self.assertEqual(messages.take(), ["prtop: one", "prtop: two"])
+        self.assertEqual(messages.take(), [])
 
 
 class FetchingInTheBackground(unittest.TestCase):

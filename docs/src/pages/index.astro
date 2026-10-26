@@ -15,6 +15,11 @@ const setup = `Set up prtop for me: follow https://raw.githubusercontent.com/Tom
 
 const install = `brew install TomyCesaille/tap/prtop    # macOS, Linux
 choco install prtop                    # Windows`;
+
+const configure = `# ~/.config/prtop/.env (%APPDATA%\\prtop\\.env on Windows)
+# gitlab (the default), github, or gitlab,github for both
+PRTOP_FORGES=gitlab,github
+PRTOP_GITLAB_HOST=gitlab.example.com`;
 ---
 
 <Layout>
@@ -41,13 +46,13 @@ choco install prtop                    # Windows`;
   </a>
 
   <header class="header">
-    <span class="logo">prtop</span>
+    <span class="logo"><img src={`${base}/favicon.svg`} width="28" height="28" alt="" />prtop</span>
     <ThemeToggle />
   </header>
 
   <section class="hero section">
     <h1>htop for your merge requests.</h1>
-    <p class="subtitle">Your GitLab MRs, from review to production, live in your terminal. Built to wake Claude Code.</p>
+    <p class="subtitle">Your GitLab MRs and GitHub PRs, from review to production, live in your terminal. Built to wake Claude Code.</p>
     <div class="badges">
       <img src="https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=fff" height="20" alt="Python 3.14 or later" />
       <a href="https://github.com/TomyCesaille/prtop/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" aria-label="prtop's MIT license">
@@ -80,7 +85,9 @@ choco install prtop                    # Windows`;
   <section class="install section">
     <h2>Install</h2>
     <pre><code>{install}</code></pre>
-    <p>Then <code>glab auth login</code>, and <code>prtop</code>.</p>
+    <p>Sign in with <code>glab auth login</code>, <code>gh auth login</code> or both, and name what prtop reads:</p>
+    <pre><code>{configure}</code></pre>
+    <p>Then run <code>prtop</code>.</p>
   </section>
 
   <section class="howto section">
@@ -89,7 +96,7 @@ choco install prtop                    # Windows`;
     <img
       src={`${base}/how-to-read-prtop.png`}
       width="2469"
-      height="1841"
+      height="1666"
       loading="lazy"
       alt="prtop's live view, annotated. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them."
     />
@@ -116,6 +123,9 @@ choco install prtop                    # Windows`;
   }
 
   .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-family: var(--font-mono);
     font-size: 20px;
     font-weight: 700;

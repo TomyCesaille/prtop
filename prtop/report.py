@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
+from itertools import accumulate
 from typing import NamedTuple
 
 from prtop import model
@@ -149,16 +150,13 @@ def clip(text: str, width: int) -> str:
     hyperlink the cut falls inside closed again."""
     if display_width(text) <= width:
         return text
-    out, used, linked = [], 0, False
-    for token in _CELL_RE.findall(text):
-        if token.startswith("\033]"):
-            linked = token != _LINK_END
-        elif used + _cells(token) > width - 1:
-            break
-        else:
-            used += _cells(token)
-        out.append(token)
-    return "".join(out) + "…" + (_LINK_END if linked else "")
+    tokens = _CELL_RE.findall(text)
+    # Cells used up to and including each token, a hyperlink escape taking none.
+    # The count only grows, so the tokens kept are the start of the line.
+    used = accumulate(0 if token.startswith("\033]") else _cells(token) for token in tokens)
+    kept = [token for token, cells in zip(tokens, used) if cells <= width - 1]
+    links = [token for token in kept if token.startswith("\033]")]
+    return "".join(kept) + "…" + (_LINK_END if links and links[-1] != _LINK_END else "")
 
 
 def linked_mr_id(entry: dict, mr_id: str) -> str:
@@ -179,19 +177,19 @@ class Row(NamedTuple):
     task_url: str | None = None
 
 
-def open_row(key: str, entry: dict) -> Row:
+def open_row(mr_id: str, entry: dict) -> Row:
     mark, status = fmt_status(
         entry["status"], entry["fully_approved"], entry["has_conflicts"],
         entry["threads_await_user"],
     )
     task = entry.get("task") or "—"
-    return Row(mark, entry["title"], task, linked_mr_id(entry, key), status, entry.get("task_url"))
+    return Row(mark, entry["title"], task, linked_mr_id(entry, mr_id), status, entry.get("task_url"))
 
 
-def deploy_row(key: str, entry: dict, state: DeployState) -> Row:
+def deploy_row(mr_id: str, entry: dict, state: DeployState) -> Row:
     mark, status = deploy_signal(state)
     task = entry.get("task") or "—"
-    return Row(mark, entry.get("title", ""), task, linked_mr_id(entry, key), status, entry.get("task_url"))
+    return Row(mark, entry.get("title", ""), task, linked_mr_id(entry, mr_id), status, entry.get("task_url"))
 
 
 def unreachable_row(host: str) -> Row:
@@ -201,7 +199,8 @@ def unreachable_row(host: str) -> Row:
     the mark feeds the tab color, where green would claim "all clear" — a claim
     the run cannot make about MRs it never saw.
     """
-    return Row(ACT, host, "—", "—", "🔌 instance unreachable")
+    # The PR cell links to the instance, which tells two forges' outages apart.
+    return Row(ACT, host, "—", hyperlink("—", f"https://{host}"), "🔌 instance unreachable")
 
 
 def _sort_key(row: Row) -> tuple[int, str, str, int]:

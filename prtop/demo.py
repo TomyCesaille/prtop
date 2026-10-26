@@ -1,5 +1,6 @@
 """`prtop --demo`: the report for a made-up set of merge requests, one per kind
-of row, without a forge, a state file or a terminal tab to touch.
+of row, without a forge, a state file or a terminal tab to touch. They live on a
+GitLab instance and on github.com, read together as a real check would.
 
 In the live view the demo moves on at each fetch, through a few events of a
 working day, so rows change under the countdown as they do against a forge."""
@@ -15,6 +16,7 @@ from prtop.model import DeployState
 from prtop.report import ACT, Report, assemble_rows, by_severity, deploy_row, open_row
 
 HOST = "gitlab.example.com"
+TITLE = f"{HOST} + github.com"
 TRACKER = "https://jira.example.com/browse"
 
 
@@ -42,7 +44,7 @@ OPEN_MRS = dict([
         status=model.DRAFT),
     _mr("api", 2547, "fix(deps): bump idna for a security advisory"),
     _mr("worker", 812, "fix: retry webhook deliveries on a 502", "PROJ-138", "Webhook retries",
-        status=model.CI_RUNNING, fully_approved=True),
+        status=model.CI_RUNNING, fully_approved=True, web_url="https://github.com/acme/worker/pull/812"),
 ])
 
 DEPLOYMENTS = [
