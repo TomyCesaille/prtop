@@ -177,6 +177,11 @@ class UnreachableInstance(unittest.TestCase):
         rows = by_severity([row(PEOPLE, pr="`frontend!7`"), unreachable_row(HOST)])
         self.assertEqual(rows[0].title, HOST)
 
+    def test_the_row_links_to_the_instance_and_reads_as_a_dash(self):
+        r = unreachable_row(HOST)
+        self.assertEqual(plain(r.pr), "—")
+        self.assertIn(f"https://{HOST}", r.pr)
+
     def test_a_row_with_no_mr_number_still_sorts(self):
         rows = by_severity([row(ACT, pr="`frontend!7`"), unreachable_row(HOST)])
         self.assertEqual(len(rows), 2)

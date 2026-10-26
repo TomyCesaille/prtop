@@ -199,7 +199,8 @@ def unreachable_row(host: str) -> Row:
     the mark feeds the tab color, where green would claim "all clear" — a claim
     the run cannot make about MRs it never saw.
     """
-    return Row(ACT, host, "—", "—", "🔌 instance unreachable")
+    # The PR cell links to the instance, which tells two forges' outages apart.
+    return Row(ACT, host, "—", hyperlink("—", f"https://{host}"), "🔌 instance unreachable")
 
 
 def _sort_key(row: Row) -> tuple[int, str, str, int]:

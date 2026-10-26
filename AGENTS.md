@@ -39,7 +39,8 @@ tools, one per forge.
 - **A forge that does not answer degrades the report, never fails it.** One
   `! 🔌 instance unreachable` row stands in for that forge's open merge requests,
   beside the other forge's rows, marked `!` because a green tab would claim
-  all-clear over merge requests nobody saw. The
+  all-clear over merge requests nobody saw. Its `—` PR cell links to the
+  instance, which tells two outages apart in the live view. The
   previous open entries stay in the state file, not in the table: they are the
   baseline that tells the next fetch what merged, so an outage never reads as a
   wave of merges. A merge check that fails keeps its entry in that baseline and is

@@ -11,7 +11,17 @@ from datetime import datetime, timedelta
 from prtop import live
 from prtop.live import REVERSE, Fetcher, Messages, fit
 from prtop.model import ForgeError
-from prtop.report import ACT, NOTHING_OPEN, PEOPLE, TITLE_MAX, Report, Row, display_width, hyperlink
+from prtop.report import (
+    ACT,
+    NOTHING_OPEN,
+    PEOPLE,
+    TITLE_MAX,
+    Report,
+    Row,
+    display_width,
+    hyperlink,
+    unreachable_row,
+)
 
 STARTED = datetime(2026, 10, 21, 14, 0, 0)
 
@@ -182,6 +192,16 @@ class LiveView(unittest.TestCase):
         highlighted = [line for line in self.terminal.frames[-1] if line.startswith(REVERSE)]
         self.assertEqual(len(highlighted), 1)
         self.assertIn("mergeable", highlighted[0])
+
+    def test_a_second_forge_going_unreachable_changes_on_its_own(self):
+        self.reports = [
+            report(unreachable_row("github.com"), row(1)),
+            report(unreachable_row("github.com"), unreachable_row("gitlab.example.com")),
+        ]
+        self.run_view(keys=[(40, "q")])
+        highlighted = [line for line in self.terminal.frames[-1] if line.startswith(REVERSE)]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("gitlab.example.com", highlighted[0])
 
     def test_nothing_open_says_so_in_place_of_the_table(self):
         self.reports = [report()]
