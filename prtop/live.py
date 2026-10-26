@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import NamedTuple, Protocol
 
+from prtop import __version__
 from prtop.model import ForgeError
 from prtop.report import (
     NOTHING_OPEN,
@@ -46,7 +47,9 @@ QUIT_KEYS = ("q", "F10", "Ctrl+C")
 HELP_KEYS = ("h", "?", "F1")
 PAUSE_KEYS = ("Z", "z")
 
-HELP = """\
+HELP = f"""\
+prtop {__version__}
+
 Keys
   q, F10, Ctrl+C   quit
   h, ?, F1         show or hide this help
