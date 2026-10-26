@@ -6,6 +6,8 @@ never learns which service it is reading.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from typing import NamedTuple
 
 
@@ -17,6 +19,20 @@ def mr_short_id(project_path: str, number: int) -> str:
     """The `repo!number` the PR column shows, and the state-file key. The same on
     every forge: the cell links to the merge request, which says where it lives."""
     return f"{project_path.rsplit('/', 1)[-1]}!{number}"
+
+
+def keyed_by_short_id(entries: Iterable[tuple[str, int, dict]]) -> dict[str, dict]:
+    """(project path, number, entry) triples keyed by `mr_short_id`. Where two
+    repositories of the same name would collide, both keep their full path,
+    `acme/web!7` beside `labs/web!7`, so neither row nor merge baseline is lost."""
+    entries = list(entries)
+    taken = Counter(mr_short_id(path, number) for path, number, _ in entries)
+
+    def key(path: str, number: int) -> str:
+        short = mr_short_id(path, number)
+        return short if taken[short] == 1 else f"{path}!{number}"
+
+    return {key(path, number): entry for path, number, entry in entries}
 
 
 # Review states of an open merge request. A state the forge cannot map passes

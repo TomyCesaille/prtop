@@ -133,15 +133,22 @@ Adding a state means choosing its mark first and its glyph last. The
   whose single sign-on the token lacks hides its pull requests without hiding the
   others.
 - A merged pull request is followed through the GitHub Actions runs of its merge
-  commit on the base branch, read as one pipeline. Run and job states are
-  translated into `pipelines.py`'s words; `waiting`, a job held by a protected
-  environment's reviewers, is a manual job, and the run's page is where it is
-  approved. A finished run's jobs and a commit comparison never change, so the
-  forge keeps them for the life of the process.
+  commit on the base branch, read as one pipeline: their jobs, every page of
+  them, are judged together, for the frontier's candidate commits too, since a
+  primary production job and its auxiliaries can run in different workflows.
+  Run and job states are translated into `pipelines.py`'s words; `waiting`, a
+  job held by a protected environment's reviewers, is a manual job, and the
+  run's page is where it is approved. A finished run's jobs and a commit
+  comparison never change, so the forge keeps them for the life of the process.
+- A deploy started by `workflow_run` is created only once the run it waits on is
+  over, so runs without a production job end the tracking only five minutes
+  (`DOWNSTREAM_GRACE`) after the last of them finished.
 
 ## State file
 
-One per forge, `<host>.json`, keyed by the `repo!number` the PR column shows.
+One per forge, `<host>.json`, keyed by the `repo!number` the PR column shows, or
+by the full path, `acme/web!7`, where two repositories of the same name would
+collide.
 GitLab's entries are below; GitHub's carry `repo` (`owner/name`) and `number`
 where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
 `sha` and `prod_run_id`.

@@ -5,6 +5,7 @@ import json
 import subprocess
 import unittest
 from contextlib import redirect_stderr
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -66,8 +67,8 @@ def run(id, sha="abc", status="completed", conclusion="success", attempt=1):
     return {"id": id, "head_sha": sha, "status": status, "conclusion": conclusion, "run_attempt": attempt}
 
 
-def jobs_of(run_id):
-    return f"repos/{REPO}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+def jobs_of(run_id, page=1):
+    return f"repos/{REPO}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}"
 
 
 def job(name="deploy-production", status="completed", conclusion="success", id=1):
@@ -78,17 +79,21 @@ def listing(*runs):
     return {"workflow_runs": list(runs)}
 
 
-def jobs(*items):
-    return {"jobs": list(items)}
+def jobs(*items, total=None):
+    return {"jobs": list(items), "total_count": len(items) if total is None else total}
 
 
 class FakeGitHub(GitHub):
     """Serves REST `rest[path]`, and the pull requests in `authored` and
     `assigned` to the queries; a path it was not given fails like an outage."""
 
-    def __init__(self, rest=None, *, authored=(), assigned=(), threads=None, hidden=(), **settings):
+    def __init__(self, rest=None, *, authored=(), assigned=(), threads=None, hidden=(), now=None, **settings):
         self.sleeps: list[float] = []
-        super().__init__(Config(state_dir=Path("unused"), **settings), sleep=self.sleeps.append)
+        super().__init__(
+            Config(state_dir=Path("unused"), **settings),
+            sleep=self.sleeps.append,
+            now=now or (lambda: datetime.now(UTC)),
+        )
         self.rest = rest or {}
         self.authored, self.assigned = list(authored), list(assigned)
         self.threads = threads or {}
@@ -277,6 +282,12 @@ class OpenPullRequests(unittest.TestCase):
         forge = FakeGitHub(authored=[None, pull_request(7), pull_request(8)], hidden={"PR_8"})
         self.assertEqual(list(forge.open_merge_requests(NoTasks())), ["web!7"])
 
+    def test_two_repositories_of_the_same_name_keep_both_their_rows(self):
+        labs = pull_request(7, repository={"nameWithOwner": "labs/web", "viewerPermission": "WRITE"})
+        labs["id"] = "PR_labs_7"
+        forge = FakeGitHub(authored=[pull_request(7), labs, pull_request(8)])
+        self.assertEqual(set(forge.open_merge_requests(NoTasks())), {"acme/web!7", "labs/web!7", "web!8"})
+
     def test_threads_are_asked_for_by_repository_and_number(self):
         forge = FakeGitHub(authored=[pull_request(threads=[False])], threads={7: [thread(ME)]})
         forge.open_merge_requests(NoTasks())
@@ -336,7 +347,7 @@ class Deployments(unittest.TestCase):
         return forge.deploy_states({"web!7": self.dep()})["web!7"]
 
     def frontier(self, sha="def"):
-        return {runs_for(None, 20): listing(run(9, sha)), jobs_of(9): jobs(job())}
+        return {runs_for(None, 20): listing(run(9, sha)), runs_for(sha): listing(run(9, sha)), jobs_of(9): jobs(job())}
 
     def own(self, *job_list, **run_fields):
         return {runs_for("abc"): listing(run(5, **run_fields)), jobs_of(5): jobs(*job_list)}
@@ -393,14 +404,46 @@ class Deployments(unittest.TestCase):
             self.assertEqual(self.state({}, forge), model.DeployState(model.PIPELINE_RUNNING, "pending"))
         self.assertEqual(forge.calls.count(jobs_of(5)), 2)
 
-    def test_the_frontier_is_the_newest_run_that_shipped(self):
+    def test_the_frontier_is_the_newest_commit_that_shipped(self):
         rest = {
             runs_for(None, 20): listing(run(8, "old"), run(10, "new", status="in_progress"), run(9, "def")),
+            runs_for("new"): listing(run(10, "new", status="in_progress")),
             jobs_of(10): jobs(job(status="in_progress")),
+            runs_for("def"): listing(run(9, "def")),
             jobs_of(9): jobs(job()),
             COMPARE: {"status": "identical"},
         }
         self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_an_auxiliary_deploy_in_another_workflow_does_not_pass_for_the_app_shipping(self):
+        workflows = listing(run(5, status="waiting", conclusion=None), run(6))
+        rest = {
+            runs_for(None, 20): workflows,
+            runs_for("abc"): workflows,
+            jobs_of(5): jobs(job(status="waiting")),
+            jobs_of(6): jobs(job("deploy-production-heavy-duty")),
+        }
+        self.assertEqual(self.state(rest).kind, model.AWAITING_TRIGGER)
+
+    def test_a_production_job_past_the_first_hundred_jobs_is_found(self):
+        tests = [job(f"test {n}", id=n) for n in range(100)]
+        rest = {
+            runs_for(None, 20): listing(),
+            runs_for("abc"): listing(run(5)),
+            jobs_of(5): jobs(*tests, total=101),
+            jobs_of(5, page=2): jobs(job(), total=101),
+        }
+        self.assertEqual(self.state(rest).kind, model.SHIPPED)
+
+    def test_a_deploy_started_by_another_workflow_is_waited_for_a_while(self):
+        finished = run(5)
+        finished["updated_at"] = "2026-10-23T18:00:00Z"
+        rest = {runs_for(None, 20): listing(), runs_for("abc"): listing(finished), jobs_of(5): jobs(job("test"))}
+        at = datetime(2026, 10, 23, 18, 0, tzinfo=UTC)
+        for minutes, kind in ((4, model.PIPELINE_RUNNING), (5, model.NO_PROD_JOB)):
+            with self.subTest(minutes):
+                forge = FakeGitHub(rest, now=lambda m=minutes: at + timedelta(minutes=m))
+                self.assertEqual(self.state({}, forge).kind, kind)
 
 
 class ActionsStates(unittest.TestCase):
@@ -427,11 +470,11 @@ class TheGhCommand(unittest.TestCase):
     def answer(self, result):
         self.commands = []
 
-        def run(cmd, install_url):
+        def run_tool(cmd, install_url):
             self.commands.append(cmd)
             return result
 
-        return mock.patch("prtop.forges.github.run", run)
+        return mock.patch("prtop.forges.github.run_tool", run_tool)
 
     def test_every_rest_call_names_github_com(self):
         with mock.patch("prtop.forges.github.get_json", return_value={"ok": 1}) as get_json:

@@ -19,14 +19,14 @@ import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from prtop import model
 from prtop.config import Config
-from prtop.forges.command import failure, get_json, run
+from prtop.forges.command import failure, get_json, run_tool
 from prtop.forges.pipelines import ProdJobs, after_merge, classify_pending, judge_deployments
-from prtop.model import DeployState, mr_short_id
+from prtop.model import DeployState, keyed_by_short_id
 from prtop.tasks import Issue, TaskSource
 
 HOST = "github.com"
@@ -178,6 +178,16 @@ def actions_status(item: dict) -> str:
     return ACTIONS_STATUS.get(status, status)
 
 
+# How long after a merge commit's last run finished its lack of a production job
+# still leaves the tracking open: a deploy started by `workflow_run` is created
+# only once the run it waits on is over.
+DOWNSTREAM_GRACE = timedelta(minutes=5)
+
+
+def last_update(runs: list[dict]) -> datetime | None:
+    return max((datetime.fromisoformat(run["updated_at"]) for run in runs if run.get("updated_at")), default=None)
+
+
 def pipeline_status(runs: list[dict]) -> str:
     """A merge commit's runs as one pipeline: in flight while any run is, failed
     once any run failed."""
@@ -188,10 +198,17 @@ def pipeline_status(runs: list[dict]) -> str:
 class GitHub:
     host = HOST
 
-    def __init__(self, config: Config, *, sleep: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        config: Config,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ):
         self.owner = config.github_owner
         self.prod_jobs = ProdJobs(config.deploy_job_pattern, config.primary_deploy_job_pattern)
         self._sleep = sleep
+        self._now = now
         # A completed run's jobs and a commit's ancestry never change, so a live
         # view asks for them once.
         self._finished_jobs: dict[tuple[int, int], list[dict]] = {}
@@ -210,7 +227,7 @@ class GitHub:
                 cmd += [arg for item in value for arg in ("-f", f"{name}[]={item}")]
             else:
                 cmd += ["-F" if isinstance(value, int) else "-f", f"{name}={value}"]
-        result = run(cmd, GH_URL)
+        result = run_tool(cmd, GH_URL)
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -236,12 +253,12 @@ class GitHub:
         batches = [ids[i:i + BATCH] for i in range(0, len(ids), BATCH)]
         with ThreadPoolExecutor(max_workers=8) as pool:
             prs = [pr for batch in pool.map(self._pull_requests, batches) for pr in batch]
-            return dict(pool.map(lambda pr: self._entry(pr, login, tasks), prs))
+            return keyed_by_short_id(pool.map(lambda pr: self._entry(pr, login, tasks), prs))
 
     def _pull_requests(self, ids: list[str]) -> list[dict]:
         return [pr for pr in self.query(PULL_REQUESTS, ids=ids).get("nodes") or [] if pr]
 
-    def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, dict]:
+    def _entry(self, pr: dict, login: str, tasks: TaskSource) -> tuple[str, int, dict]:
         repo = pr["repository"]["nameWithOwner"]
         number = pr["number"]
         status, threads_await_user = review_state(
@@ -252,7 +269,7 @@ class GitHub:
             for i in nodes(pr, "closingIssuesReferences")
         ]
         task = tasks.resolve(pr.get("headRefName"), lambda: issues)
-        return mr_short_id(repo, number), {
+        return repo, number, {
             "title": pr.get("title", ""),
             "task": task.label if task else "",
             "task_url": task.url if task else None,
@@ -316,25 +333,41 @@ class GitHub:
         )
 
     def _jobs(self, repo: str, run: dict) -> list[dict]:
-        """The run's jobs, of its latest attempt, with their states translated."""
+        """The run's jobs, of its latest attempt and every page, with their states translated."""
         key = (run["id"], run.get("run_attempt", 1))
         if key in self._finished_jobs:
             return self._finished_jobs[key]
-        listing = self.api(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100") or {}
-        jobs = [
-            {"id": job["id"], "name": job.get("name", ""), "status": actions_status(job), "run_id": run["id"]}
-            for job in listing.get("jobs") or []
-        ]
+        jobs: list[dict] = []
+        page = 1
+        while True:
+            listing = self.api(
+                f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100&page={page}"
+            ) or {}
+            batch = listing.get("jobs") or []
+            jobs += [
+                {"id": job["id"], "name": job.get("name", ""), "status": actions_status(job), "run_id": run["id"]}
+                for job in batch
+            ]
+            if not batch or len(jobs) >= listing.get("total_count", 0):
+                break
+            page += 1
         if run.get("status") == "completed":
             self._finished_jobs[key] = jobs
         return jobs
 
+    def _commit(self, repo: str, ref: str, sha: str) -> tuple[list[dict], list[dict]]:
+        """A commit's runs on the branch, and all their jobs together: a primary
+        production job and its auxiliaries can run in different workflows."""
+        runs = self._runs(repo, ref, sha)
+        return runs, [job for run in runs for job in self._jobs(repo, run)]
+
     def _frontier(self, repo: str, ref: str) -> str | None:
-        """The commit of the newest run on the branch whose primary production
-        deploy succeeded. None when no recent run has shipped."""
-        for workflow_run in sorted(self._runs(repo, ref, count=20), key=lambda r: r["id"], reverse=True):
-            if self.prod_jobs.shipped(self._jobs(repo, workflow_run)):
-                return workflow_run["head_sha"]
+        """The newest commit among the branch's recent runs whose primary
+        production deploy succeeded. None when none of them shipped."""
+        recent = sorted(self._runs(repo, ref, count=20), key=lambda r: r["id"], reverse=True)
+        for sha in dict.fromkeys(run["head_sha"] for run in recent):
+            if self.prod_jobs.shipped(self._commit(repo, ref, sha)[1]):
+                return sha
         return None
 
     def _contains(self, repo: str, deployed: str, sha: str) -> bool:
@@ -353,8 +386,7 @@ class GitHub:
         repo = dep["repo"]
         if frontier is not None and self._contains(repo, frontier, dep["sha"]):
             return DeployState(model.SHIPPED)
-        runs = self._runs(repo, dep["ref"], dep["sha"])
-        jobs = [job for run in runs for job in self._jobs(repo, run)]
+        runs, jobs = self._commit(repo, dep["ref"], dep["sha"])
         # Safety net for a prod deploy that fell outside the frontier's window.
         if self.prod_jobs.shipped(jobs):
             return DeployState(model.SHIPPED)
@@ -363,4 +395,8 @@ class GitHub:
             dep["prod_run_id"] = prod[0]["run_id"]
             # The run's page is where a job waiting on an environment's reviewers is approved.
             trigger_url = f"https://{HOST}/{repo}/actions/runs/{prod[0]['run_id']}"
-        return classify_pending(pipeline_status(runs), jobs, self.prod_jobs, trigger_url)
+        state = classify_pending(pipeline_status(runs), jobs, self.prod_jobs, trigger_url)
+        finished = last_update(runs)
+        if state.kind == model.NO_PROD_JOB and finished and self._now() - finished < DOWNSTREAM_GRACE:
+            return DeployState(model.PIPELINE_RUNNING, "pending")
+        return state

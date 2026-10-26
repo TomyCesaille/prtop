@@ -158,6 +158,18 @@ class OpenMergeRequests(unittest.TestCase):
         with self.assertRaises(ForgeError):
             FakeGitLab({}).open_merge_requests(NoTasks())
 
+    def test_two_projects_of_the_same_name_keep_both_their_rows(self):
+        responses = open_mr()
+        responses[LIST_ALL] = [
+            {"iid": 7, "references": {"full": f"{PROJECT}!7"}},
+            {"iid": 7, "references": {"full": "acme/mobile/frontend!7"}},
+        ]
+        other = "projects/acme%2Fmobile%2Ffrontend/merge_requests/7"
+        responses[f"{other}?include_diverged_commits_count=true"] = responses[MR_DETAIL]
+        responses[f"{other}/approvals"] = responses[f"{MR}/approvals"]
+        keys = FakeGitLab(responses).open_merge_requests(NoTasks())
+        self.assertEqual(set(keys), {f"{PROJECT}!7", "acme/mobile/frontend!7"})
+
     def test_an_mr_whose_project_cannot_be_told_is_skipped(self):
         forge = FakeGitLab({LIST_ALL: [{"iid": 7}]})
         self.assertEqual(forge.open_merge_requests(NoTasks()), {})

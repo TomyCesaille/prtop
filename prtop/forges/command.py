@@ -12,7 +12,7 @@ import subprocess
 from prtop.model import ForgeError
 
 
-def run(cmd: list[str], install_url: str) -> subprocess.CompletedProcess[str]:
+def run_tool(cmd: list[str], install_url: str) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(cmd, capture_output=True, encoding="utf-8", check=False)
     except FileNotFoundError:
@@ -25,7 +25,7 @@ def failure(what: str, result: subprocess.CompletedProcess[str]) -> ForgeError:
 
 def get_json(cmd: list[str], install_url: str):
     """The JSON a command prints, or None when it prints nothing."""
-    result = run(cmd, install_url)
+    result = run_tool(cmd, install_url)
     if result.returncode != 0:
         raise failure(shlex.join(cmd), result)
     return json.loads(result.stdout) if result.stdout.strip() else None

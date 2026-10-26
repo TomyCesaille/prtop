@@ -19,7 +19,7 @@ from prtop import model
 from prtop.config import Config
 from prtop.forges.command import get_json
 from prtop.forges.pipelines import ProdJobs, after_merge, classify_pending, judge_deployments
-from prtop.model import DeployState, mr_short_id
+from prtop.model import DeployState, keyed_by_short_id
 from prtop.tasks import Issue, TaskSource
 
 GLAB_URL = "https://gitlab.com/gitlab-org/cli"
@@ -96,9 +96,9 @@ class GitLab:
             return {}
         with ThreadPoolExecutor(max_workers=min(8, len(summaries))) as pool:
             hydrated = list(pool.map(lambda summary: self._hydrate(summary, tasks), summaries))
-        return dict(item for item in hydrated if item is not None)
+        return keyed_by_short_id(item for item in hydrated if item is not None)
 
-    def _hydrate(self, summary: dict, tasks: TaskSource) -> tuple[str, dict] | None:
+    def _hydrate(self, summary: dict, tasks: TaskSource) -> tuple[str, int, dict] | None:
         project_path = project_path_from_summary(summary)
         if not project_path:
             return None
@@ -121,7 +121,7 @@ class GitLab:
 
         task = tasks.resolve(full.get("source_branch"), lambda: self._closing_issues(base))
         approvers = [(a.get("user") or {}).get("username") for a in approvals.get("approved_by") or []]
-        return mr_short_id(project_path, iid), {
+        return project_path, iid, {
             "title": full.get("title", ""),
             "task": task.label if task else "",
             "task_url": task.url if task else None,
