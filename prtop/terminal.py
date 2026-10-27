@@ -21,6 +21,10 @@ from typing import Self
 
 ENTER = "\033[?1049h\033[?25l"  # the alternate screen, with the cursor hidden
 LEAVE = "\033[?25h\033[?1049l"
+# Mouse reporting, as `htop` asks for it: the terminal hands the wheel to prtop,
+# which drops it, instead of scrolling its history behind the screen. SGR
+# encoding makes each report one escape sequence.
+MOUSE_ON, MOUSE_OFF = "\033[?1000h\033[?1006h", "\033[?1006l\033[?1000l"
 HOME, CLEAR_TO_LINE_END, CLEAR_BELOW, CLEAR = "\033[H", "\033[K", "\033[J", "\033[2J"
 
 # A function key reaches a POSIX terminal as an escape sequence.
@@ -31,7 +35,9 @@ NAMED_KEYS = {
     "\x0c": "Ctrl+L",
     "\x03": "Ctrl+C",
 }
-_UNNAMED_SEQUENCE = re.compile("\033(\\[[0-9;?]*[ -/]*[@-~]|O.)")
+# A terminal without SGR encoding reports the mouse as `CSI M` and then three
+# characters, the button and the position, that would otherwise read as keys.
+_UNNAMED_SEQUENCE = re.compile("\033(\\[M...|\\[[0-?]*[ -/]*[@-~]|O.)")
 # The Windows console reads it as a NUL, then the key's scan code.
 SCAN_CODES = {";": "F1", "D": "F10"}
 
@@ -39,7 +45,7 @@ SCAN_CODES = {";": "F1", "D": "F10"}
 def decode_keys(text: str) -> list[str]:
     """Name each key in what the terminal sent: a printable key as itself, a
     known sequence by its name, a lone escape as `Esc`. Sequences prtop has no
-    use for, the arrows among them, are dropped."""
+    use for, the arrows and the mouse among them, are dropped."""
     keys: list[str] = []
     i = 0
     while i < len(text):
@@ -96,13 +102,13 @@ class _PosixTerminal(_Screen):
         self._modes = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
         self._on_term = signal.signal(signal.SIGTERM, _exit_on)
-        self._write(ENTER)
+        self._write(ENTER + MOUSE_ON)
         return self
 
     def __exit__(self, *exc: object) -> None:
         import termios
 
-        self._write(LEAVE)
+        self._write(MOUSE_OFF + LEAVE)
         signal.signal(signal.SIGTERM, self._on_term)
         termios.tcsetattr(self._fd, termios.TCSADRAIN, self._modes)
 

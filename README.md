@@ -65,7 +65,9 @@ prtop
 
 In a terminal, prtop takes the screen and fetches again every 30 seconds. The top
 line names the forges it reads, the time of the last fetch and the countdown to
-the next one; the bottom line lists the keys.
+the next one; the bottom line lists the keys. On macOS and Linux it keeps the
+mouse the way htop does: the wheel does not scroll the terminal's history, and
+selecting text takes Option in iTerm2, Shift in most other terminals.
 
 | Key | Does |
 |---|---|
