@@ -12,7 +12,7 @@ tools, one per forge.
 |---|---|
 | `prtop/cli.py` | The command: one fetch (`run_check`, one `check_forge` per forge), the choice between the live view and one table, `watch`, the arguments. |
 | `prtop/live.py` | The live view: the frame, the fetch loop, the keys. Pure enough to test with a fake terminal and clock. |
-| `prtop/terminal.py` | The real terminal: alternate screen, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
+| `prtop/terminal.py` | The real terminal: alternate screen, mouse reporting on POSIX, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
 | `prtop/report.py` | Marks, Status cells, row order and the table. The accessibility contract lives here. |
 | `prtop/model.py` | The vocabulary a forge hands to the report: review states, deploy states, the state-file key and the `repo!number` the PR column shows, `ForgeError`. |
 | `prtop/forges/` | One module per forge behind the `Forge` protocol: `gitlab.py` and `github.py` each own every call and field name of their service. `command.py` runs `glab` and `gh`; `pipelines.py` holds what both map production tracking onto: job statuses, the production jobs, the frontier. |

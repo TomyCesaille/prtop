@@ -19,6 +19,8 @@ from prtop.terminal import (
     ENTER,
     HOME,
     LEAVE,
+    MOUSE_OFF,
+    MOUSE_ON,
     _exit_on,
     _PosixTerminal,
     _WindowsTerminal,
@@ -38,6 +40,13 @@ class Keys(unittest.TestCase):
 
     def test_keys_prtop_has_no_use_for_are_dropped(self):
         self.assertEqual(decode_keys("\033[A\033[1;5Cq"), ["q"])
+
+    def test_the_wheel_and_clicks_read_as_no_key(self):
+        self.assertEqual(decode_keys("\033[<64;81;5M\033[<65;81;5M\033[<0;10;3mq"), ["q"])
+
+    def test_a_mouse_report_without_sgr_encoding_reads_as_no_key(self):
+        # Button 64 at column 81, row 5: the column travels as a `q`.
+        self.assertEqual(decode_keys("\033[M`q%\033[Maq%"), [])
 
     def test_a_lone_escape_reads_as_esc(self):
         self.assertEqual(decode_keys("\033"), ["Esc"])
@@ -145,7 +154,7 @@ class PosixTerminal(unittest.TestCase):
         self.assertEqual((cbreak, during), ([5], _exit_on))
         self.assertEqual(termios.restored, [(5, FakeTermios.TCSADRAIN, ["the keyboard's modes"])])
         self.assertEqual(signal.getsignal(signal.SIGTERM), before)
-        self.assertEqual(out.getvalue(), ENTER + LEAVE)
+        self.assertEqual(out.getvalue(), ENTER + MOUSE_ON + MOUSE_OFF + LEAVE)
 
     def test_keys_are_read_as_they_are_pressed(self):
         with redirect_stdout(io.StringIO()):
@@ -222,9 +231,8 @@ class FullScreen(unittest.TestCase):
     def test_q_gives_the_screen_back(self):
         code, output = self.run_demo(keys=b"q")
         self.assertEqual(code, 0)
-        self.assertIn(ENTER, output)
-        self.assertTrue(output.rstrip().endswith(LEAVE), output[-200:])
-
+        self.assertIn(ENTER + MOUSE_ON, output)
+        self.assertTrue(output.rstrip().endswith(MOUSE_OFF + LEAVE), output[-200:])
     def test_with_n_the_last_table_stays_on_the_screen(self):
         code, output = self.run_demo("-n", "1")
         self.assertEqual(code, 0)

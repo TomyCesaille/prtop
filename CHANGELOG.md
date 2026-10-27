@@ -6,6 +6,12 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On macOS and Linux, the live view keeps the mouse the way htop does: the wheel
+  does not scroll the terminal's history behind the table. Selecting text takes
+  Option in iTerm2, Shift in most other terminals.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added
