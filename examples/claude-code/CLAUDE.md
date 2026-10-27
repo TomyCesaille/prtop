@@ -13,6 +13,3 @@ minutes and exits as soon as the table changes, which wakes you. When it exits:
 The table lists every merge request and pull request of mine. Say nothing about
 the others unless I ask. Keep watching until this task's merge requests are merged and in
 production, or until I say stop.
-
-If `prtop` is already open in a terminal of mine, it fetches every 30 seconds;
-skip the watch and run `/prs` when I ask.

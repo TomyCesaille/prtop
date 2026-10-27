@@ -6,18 +6,20 @@ import runpy
 import tempfile
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 from prtop import model
-from prtop.cli import batch, main, parse_args, run_check, show_live, tab_color_hook, watch
+from prtop.cli import batch, main, parse_args, report_hook, run_check, show_live, watch
 from prtop.config import Config, ConfigError
 from prtop.forges import make_forges
 from prtop.forges.github import GitHub
 from prtop.forges.gitlab import GitLab
 from prtop.live import View
 from prtop.model import DeployState, ForgeError
-from prtop.report import NOTHING_OPEN, Report, plain
+from prtop.report import NOTHING_OPEN, Report, Row, plain
+from prtop.state import save_report
 from prtop.tasks import NoTasks, Task
 
 HOST = "gitlab.example.com"
@@ -46,8 +48,10 @@ class FakeForge:
         self.states: dict[str, DeployState] = {}
         self.asked_about_merges: list[int] = []
         self.merge_check_error: str | None = None
+        self.listings = 0
 
     def open_merge_requests(self, tasks):
+        self.listings += 1
         if self.error:
             raise ForgeError(self.error)
         return dict(self.open)
@@ -281,6 +285,9 @@ class SeveralForges(unittest.TestCase):
         self.assertEqual([f.host for f in forges], ["github.com", "gitlab.com"])
 
 
+LIVE = Report([Row("~", "feat: in the live view", "—", "`web!1`", "👀 awaiting review")], False, False)
+
+
 class Watch(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -296,11 +303,12 @@ class Watch(unittest.TestCase):
         if self.checks == self.change_after:
             self.forge.open = {"frontend!1": entry(1, model.MERGEABLE, approved=True, title="feat: ready")}
 
-    def watch(self, change_after=None, cap=3600):
+    def watch(self, change_after=None, cap=3600, sleep=None):
         self.change_after = change_after
         out = io.StringIO()
         with redirect_stdout(out):
-            code = watch(self.config, [self.forge], NoTasks(), 300, cap, sleep=self.sleep, clock=lambda: self.now)
+            code = watch(self.config, [self.forge], NoTasks(), 300, cap,
+                         sleep=sleep or self.sleep, clock=lambda: self.now)
         return code, out.getvalue()
 
     def test_it_exits_with_the_report_as_soon_as_something_changes(self):
@@ -323,6 +331,44 @@ class Watch(unittest.TestCase):
             code, out = self.watch()
         self.assertEqual(code, 1)
         self.assertIn("check failed", out)
+
+    def test_next_to_an_open_live_view_it_makes_no_forge_calls(self):
+        report_hook(self.config, [self.forge])(LIVE)
+        code, out = self.watch(cap=900)
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("no change"), 4)
+        self.assertEqual(self.forge.listings, 0)
+
+    def test_a_change_the_live_view_fetched_wakes_it(self):
+        live_view = report_hook(self.config, [self.forge])
+        live_view(LIVE)
+
+        def approved(seconds):
+            self.now += seconds
+            live_view(Report([Row("!", "feat: in the live view", "—", "`web!1`", "✅ mergeable, approved")], False, True))
+
+        code, out = self.watch(sleep=approved)
+        self.assertEqual(code, 0)
+        self.assertIn("mergeable, approved", out)
+        self.assertEqual(self.forge.listings, 0)
+
+    def test_once_the_live_view_closes_it_fetches_again_with_no_change_to_report(self):
+        self.forge.open = {"frontend!1": entry(1)}
+        seen = run_check(self.config, [self.forge], NoTasks())
+        report_hook(self.config, [self.forge])(seen)
+
+        def closed(seconds):
+            self.now += seconds
+            save_report(self.config.report_file, [HOST], seen, datetime.now(UTC) - timedelta(seconds=300))
+
+        _, out = self.watch(cap=900, sleep=closed)
+        self.assertTrue(out.rstrip().endswith("TIMEOUT after 900s with no PR activity"))
+        self.assertEqual(self.forge.listings, 1 + 3)
+
+    def test_a_live_view_of_other_forges_does_not_stand_in_for_this_one(self):
+        report_hook(self.config, [FakeForge("github.com")])(LIVE)
+        self.watch(cap=300)
+        self.assertEqual(self.forge.listings, 2)
 
 
 class Batch(unittest.TestCase):
@@ -422,9 +468,25 @@ class Main(unittest.TestCase):
         with mock.patch("prtop.cli.show_live", return_value=0) as live_view, \
                 mock.patch("sys.stdin", Terminal()), redirect_stdout(Terminal()):
             self.assertEqual(main(["-d", "10"]), 0)
-        fetch, title, delay, max_iterations, on_report = live_view.call_args.args
-        self.assertEqual((title, delay, max_iterations, on_report), (f"{HOST} + github.com", 10, None, None))
+        fetch, title, delay, max_iterations, _ = live_view.call_args.args
+        self.assertEqual((title, delay, max_iterations), (f"{HOST} + github.com", 10, None))
         self.assertIn("feat: on github", fetch().text)
+
+    def test_the_live_view_saves_each_report_for_watch(self):
+        with mock.patch("prtop.cli.show_live", return_value=0) as live_view, \
+                mock.patch("sys.stdin", Terminal()), redirect_stdout(Terminal()):
+            main([])
+        fetch, *_, on_report = live_view.call_args.args
+        on_report(fetch())
+        saved = json.loads(self.config.report_file.read_text())
+        self.assertEqual(saved["hosts"], [HOST, "github.com"])
+        self.assertIn("feat: on github", json.dumps(saved["rows"]))
+
+    def test_the_demo_saves_nothing_for_watch(self):
+        with mock.patch("prtop.cli.show_live", return_value=0) as live_view, \
+                mock.patch("sys.stdin", Terminal()), redirect_stdout(Terminal()):
+            main(["--demo"])
+        self.assertIsNone(live_view.call_args.args[-1])
 
 
 class ModuleEntry(unittest.TestCase):
@@ -466,16 +528,17 @@ class LiveScreen(unittest.TestCase):
 
 
 class TabColor(unittest.TestCase):
-    def printed(self, action_needed):
+    def printed(self, action_needed, iterm_tab_color=True):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        config = Config(state_dir=Path(tmp.name), iterm_tab_color=iterm_tab_color)
         out = io.StringIO()
         with redirect_stdout(out):
-            tab_color_hook(Config(state_dir=Path("unused"), iterm_tab_color=True))(
-                Report([], False, action_needed)
-            )
+            report_hook(config, [FakeForge()])(Report([], False, action_needed))
         return out.getvalue()
 
     def test_the_tab_keeps_its_color_unless_asked(self):
-        self.assertIsNone(tab_color_hook(Config(state_dir=Path("unused"))))
+        self.assertEqual(self.printed(True, iterm_tab_color=False), "")
 
     def test_the_iterm_tab_turns_orange_while_an_mr_is_on_you(self):
         self.assertIn("\033]6;1;bg;red;brightness;255\a", self.printed(True))

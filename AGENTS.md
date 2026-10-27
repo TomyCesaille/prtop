@@ -18,7 +18,7 @@ tools, one per forge.
 | `prtop/forges/` | One module per forge behind the `Forge` protocol: `gitlab.py` and `github.py` each own every call and field name of their service. `command.py` runs `glab` and `gh`; `pipelines.py` holds what both map production tracking onto: job statuses, the production jobs, the frontier. |
 | `prtop/tasks.py` | Task sources: what fills the Task column. |
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
-| `prtop/state.py` | The state file, written atomically. |
+| `prtop/state.py` | The state files and the live view's latest report, written atomically. |
 | `prtop/demo.py` | The made-up report behind `--demo`, and the story its live view plays, one event per fetch. |
 | `docs/` | The website, an Astro site. `docs/public/prtop.gif`, shown on the site and in the README, is `prtop --demo -d 4` recorded in a 141×19 terminal. `docs/infographic/how_to_read_prtop.py` draws `docs/public/how-to-read-prtop.png` from the demo's live view. |
 
@@ -186,6 +186,25 @@ where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
                        "prod_job_id" }
   },
   "last_checked": "<ISO 8601>"
+}
+```
+
+## The live view's report
+
+Each report the live view gets from a fetch is saved to `report.json` beside the
+state files, with the hosts it read and when. `prtop watch` renders from it
+instead of fetching when it reads the same hosts and is under `-d` seconds old,
+so a watch next to an open live view makes no forge calls and never moves the
+merge-detection baseline. The demo saves nothing.
+
+```jsonc
+{
+  "hosts": ["gitlab.example.com", "github.com"],
+  "fetched_at": "<ISO 8601>",
+  "show_task": true,
+  "action_needed": false,
+  // One `Row` per array, `null` for the rule between two blocks.
+  "rows": [["!", "<title>", "<task>", "<PR cell>", "<Status cell>", "<task url>"], null]
 }
 ```
 

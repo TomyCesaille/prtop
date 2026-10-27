@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import redirect_stderr
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from prtop import __version__, live, model
 from prtop.config import Config, ConfigError, load_config
@@ -33,7 +33,7 @@ from prtop.report import (
     open_row,
     unreachable_row,
 )
-from prtop.state import load_state, save_state
+from prtop.state import load_report, load_state, save_report, save_state
 from prtop.tasks import TaskSource, task_source
 from prtop.terminal import fullscreen
 
@@ -119,7 +119,7 @@ def run_check(config: Config, forges: list[Forge], tasks: TaskSource) -> Report:
     return Report(assemble_rows(open_rows, deploy_rows), tasks.shows_column, action_needed)
 
 
-# ---------- Terminal tab color ----------
+# ---------- Beside the live view's table ----------
 
 def set_tab_color(action_needed: bool) -> None:
     """iTerm2 tab color: orange while an open MR is on you, green otherwise — a
@@ -134,11 +134,17 @@ def set_tab_color(action_needed: bool) -> None:
     sys.stdout.flush()
 
 
-def tab_color_hook(config: Config) -> Callable[[Report], None] | None:
-    """What the live view does with each report beside showing it."""
-    if not config.iterm_tab_color:
-        return None
-    return lambda report: set_tab_color(report.action_needed)
+def report_hook(config: Config, forges: list[Forge]) -> Callable[[Report], None]:
+    """What the live view does with each report beside showing it: saves it
+    for `prtop watch`, and colors the iTerm2 tab when asked."""
+    hosts = [forge.host for forge in forges]
+
+    def on_report(report: Report) -> None:
+        save_report(config.report_file, hosts, report, datetime.now(UTC))
+        if config.iterm_tab_color:
+            set_tab_color(report.action_needed)
+
+    return on_report
 
 
 # ---------- Entry point ----------
@@ -204,18 +210,25 @@ def watch(
     a backgrounded run re-invokes the agent that started it exactly when
     something needs attention. The first check only records a baseline.
 
+    A check reads the live view's latest report instead of fetching when the
+    live view fetched less than `delay` seconds ago, so a watch next to an
+    open live view makes no forge calls of its own.
+
     Exits 0 on a change or after `cap` quiet seconds (with a TIMEOUT line), and
     1 when a check fails.
     """
     started = clock()
+    hosts = [forge.host for forge in forges]
     baseline = None
     while True:
-        try:
-            report = run_check(config, forges, tasks)
-        except ForgeError as e:
-            print(f"prtop: {e}", file=sys.stderr)
-            print("[watch] check failed", flush=True)
-            return 1
+        report = load_report(config.report_file, hosts, datetime.now(UTC), timedelta(seconds=delay))
+        if report is None:
+            try:
+                report = run_check(config, forges, tasks)
+            except ForgeError as e:
+                print(f"prtop: {e}", file=sys.stderr)
+                print("[watch] check failed", flush=True)
+                return 1
         # Links included: they tell two forges' identical PR ids apart.
         if baseline is not None and report.text != baseline:
             print(report.text, flush=True)
@@ -312,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         def fetch() -> Report:
             return run_check(config, forges, tasks)
 
-        title, on_report = " + ".join(forge.host for forge in forges), tab_color_hook(config)
+        title, on_report = " + ".join(forge.host for forge in forges), report_hook(config, forges)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         return show_live(fetch, title, args.delay, args.max_iterations, on_report)

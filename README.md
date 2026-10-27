@@ -100,6 +100,7 @@ empty value counts as unset. [`.env.example`](.env.example) lists every setting.
 |---|---|---|
 | Env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
 | State, one file per forge | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
+| The live view's latest table, for `prtop watch` | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
 platform; `PRTOP_CONFIG_FILE` names the env file outright, and `PRTOP_STATE_DIR`
@@ -174,6 +175,9 @@ background and be woken by:
 
 - it checks every 5 minutes (`-d SECONDS`) and prints a `[watch] <time> no change`
   line after each quiet check;
+- a check reads the live view's latest table instead of fetching when the live
+  view fetched less than `-d` seconds ago, so next to an open `prtop` the watch
+  makes no calls to GitLab or GitHub of its own;
 - it exits 0 with the new table as soon as the table changes;
 - it exits 0 with a `TIMEOUT after <cap>s with no PR activity` line after
   `--cap SECONDS` of quiet (2 hours by default);

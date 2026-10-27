@@ -8,6 +8,10 @@ prtop's user-facing changes, newest first. The format follows
 
 ### Changed
 
+- `prtop watch` reads the live view's latest table instead of fetching when the
+  live view fetched less than `-d` seconds ago, so next to an open `prtop` it
+  makes no calls to GitLab or GitHub of its own. The live view saves each table
+  to `report.json` in the state directory.
 - On macOS and Linux, the live view keeps the mouse the way htop does: the wheel
   does not scroll the terminal's history behind the table. Selecting text takes
   Option in iTerm2, Shift in most other terminals.
