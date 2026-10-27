@@ -11,7 +11,7 @@ otherwise:
 |---|---|---|
 | env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
 | state | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
-| the live view's latest report | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
+| the latest fetch's report | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
 platform. On Windows the settings roam with the user's profile, while the state
@@ -67,7 +67,7 @@ class Config:
 
     @property
     def report_file(self) -> Path:
-        """The live view's latest report, for `prtop watch` to read."""
+        """The latest fetch's report, shared between the prtops running at once."""
         return self.state_dir / "report.json"
 
 

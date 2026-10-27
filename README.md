@@ -86,6 +86,10 @@ When its output is not a terminal (a pipe, a file, a script, an AI agent), prtop
 prints the table once and exits. Errors go to stderr, so the output stays one
 table.
 
+Several prtops running at once share their fetches: one about to fetch less than
+10 seconds after another fetched, with the same settings, shows that fetch
+instead of calling GitLab or GitHub again.
+
 ## How to read prtop
 
 ![prtop's live view, annotated. 1, the mark says whose move it is: ! on you (mergeable, rebase, conflicts, own threads, failed pipeline, prod trigger), ? to look at (changes requested, open threads, unknown status), ~ someone else (awaiting review, draft, blocked), . running (CI, merge check, deploying). 2, links open the merge request, its task and the prod trigger. 3, highlighted rows changed at the last fetch. 4, open merge requests, sorted by mark. 5, merged ones, until production runs them.](docs/public/how-to-read-prtop.png)
@@ -100,7 +104,7 @@ empty value counts as unset. [`.env.example`](.env.example) lists every setting.
 |---|---|---|
 | Env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
 | State, one file per forge | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
-| The live view's latest table, for `prtop watch` | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
+| The latest fetch's table | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
 platform; `PRTOP_CONFIG_FILE` names the env file outright, and `PRTOP_STATE_DIR`
@@ -175,9 +179,6 @@ background and be woken by:
 
 - it checks every 5 minutes (`-d SECONDS`) and prints a `[watch] <time> no change`
   line after each quiet check;
-- a check reads the live view's latest table instead of fetching when the live
-  view fetched less than `-d` seconds ago, so next to an open `prtop` the watch
-  makes no calls to GitLab or GitHub of its own;
 - it exits 0 with the new table as soon as the table changes;
 - it exits 0 with a `TIMEOUT after <cap>s with no PR activity` line after
   `--cap SECONDS` of quiet (2 hours by default);

@@ -39,6 +39,10 @@ from prtop.terminal import fullscreen
 
 DEFAULT_WATCH_DELAY = 300
 DEFAULT_WATCH_CAP = 7200
+# A fetch this recent stands in for a new one, whichever prtop made it, so the
+# live view, one-shot tables and watches running together share their calls
+# to the forges.
+FRESH_FOR = timedelta(seconds=10)
 
 
 def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict) -> dict:
@@ -119,7 +123,22 @@ def run_check(config: Config, forges: list[Forge], tasks: TaskSource) -> Report:
     return Report(assemble_rows(open_rows, deploy_rows), tasks.shows_column, action_needed)
 
 
-# ---------- Beside the live view's table ----------
+def fetch_report(
+    config: Config,
+    forges: list[Forge],
+    tasks: TaskSource,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> Report:
+    """The latest fetch of a prtop with the same settings when it is under
+    `FRESH_FOR` old, a fetch of this one's otherwise."""
+    report = load_report(config, now(), FRESH_FOR)
+    if report is None:
+        report = run_check(config, forges, tasks)
+        save_report(config, report, now())
+    return report
+
+
+# ---------- Terminal tab color ----------
 
 def set_tab_color(action_needed: bool) -> None:
     """iTerm2 tab color: orange while an open MR is on you, green otherwise — a
@@ -134,17 +153,11 @@ def set_tab_color(action_needed: bool) -> None:
     sys.stdout.flush()
 
 
-def report_hook(config: Config, forges: list[Forge]) -> Callable[[Report], None]:
-    """What the live view does with each report beside showing it: saves it
-    for `prtop watch`, and colors the iTerm2 tab when asked."""
-    hosts = [forge.host for forge in forges]
-
-    def on_report(report: Report) -> None:
-        save_report(config.report_file, hosts, report, datetime.now(UTC))
-        if config.iterm_tab_color:
-            set_tab_color(report.action_needed)
-
-    return on_report
+def tab_color_hook(config: Config) -> Callable[[Report], None] | None:
+    """What the live view does with each report beside showing it."""
+    if not config.iterm_tab_color:
+        return None
+    return lambda report: set_tab_color(report.action_needed)
 
 
 # ---------- Entry point ----------
@@ -205,30 +218,25 @@ def watch(
     *,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
     """Check every `delay` seconds and exit as soon as the report changes, so
     a backgrounded run re-invokes the agent that started it exactly when
-    something needs attention. The first check only records a baseline.
-
-    A check reads the live view's latest report instead of fetching when the
-    live view fetched less than `delay` seconds ago, so a watch next to an
-    open live view makes no forge calls of its own.
+    something needs attention. The first check only records a baseline. A
+    check made within 10 seconds of another prtop's fetch reads that fetch.
 
     Exits 0 on a change or after `cap` quiet seconds (with a TIMEOUT line), and
     1 when a check fails.
     """
     started = clock()
-    hosts = [forge.host for forge in forges]
     baseline = None
     while True:
-        report = load_report(config.report_file, hosts, datetime.now(UTC), timedelta(seconds=delay))
-        if report is None:
-            try:
-                report = run_check(config, forges, tasks)
-            except ForgeError as e:
-                print(f"prtop: {e}", file=sys.stderr)
-                print("[watch] check failed", flush=True)
-                return 1
+        try:
+            report = fetch_report(config, forges, tasks, now)
+        except ForgeError as e:
+            print(f"prtop: {e}", file=sys.stderr)
+            print("[watch] check failed", flush=True)
+            return 1
         # Links included: they tell two forges' identical PR ids apart.
         if baseline is not None and report.text != baseline:
             print(report.text, flush=True)
@@ -323,9 +331,9 @@ def main(argv: list[str] | None = None) -> int:
             return watch(config, forges, tasks, args.delay, args.cap)
 
         def fetch() -> Report:
-            return run_check(config, forges, tasks)
+            return fetch_report(config, forges, tasks)
 
-        title, on_report = " + ".join(forge.host for forge in forges), report_hook(config, forges)
+        title, on_report = " + ".join(forge.host for forge in forges), tab_color_hook(config)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         return show_live(fetch, title, args.delay, args.max_iterations, on_report)

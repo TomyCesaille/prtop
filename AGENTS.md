@@ -10,7 +10,7 @@ tools, one per forge.
 
 | Module | Holds |
 |---|---|
-| `prtop/cli.py` | The command: one fetch (`run_check`, one `check_forge` per forge), the choice between the live view and one table, `watch`, the arguments. |
+| `prtop/cli.py` | The command: one fetch (`run_check`, one `check_forge` per forge), shared between prtops for 10 seconds (`fetch_report`), the choice between the live view and one table, `watch`, the arguments. |
 | `prtop/live.py` | The live view: the frame, the fetch loop, the keys. Pure enough to test with a fake terminal and clock. |
 | `prtop/terminal.py` | The real terminal: alternate screen, mouse reporting on POSIX, key reading on POSIX (`termios`) and Windows (`msvcrt`), key decoding. |
 | `prtop/report.py` | Marks, Status cells, row order and the table. The accessibility contract lives here. |
@@ -18,7 +18,7 @@ tools, one per forge.
 | `prtop/forges/` | One module per forge behind the `Forge` protocol: `gitlab.py` and `github.py` each own every call and field name of their service. `command.py` runs `glab` and `gh`; `pipelines.py` holds what both map production tracking onto: job statuses, the production jobs, the frontier. |
 | `prtop/tasks.py` | Task sources: what fills the Task column. |
 | `prtop/config.py` | `PRTOP_*` settings, the env file, where files live on each platform. |
-| `prtop/state.py` | The state files and the live view's latest report, written atomically. |
+| `prtop/state.py` | The state files and the latest fetch's report, written atomically. |
 | `prtop/demo.py` | The made-up report behind `--demo`, and the story its live view plays, one event per fetch. |
 | `docs/` | The website, an Astro site. `docs/public/prtop.gif`, shown on the site and in the README, is `prtop --demo -d 4` recorded in a 141×19 terminal. `docs/infographic/how_to_read_prtop.py` draws `docs/public/how-to-read-prtop.png` from the demo's live view. |
 
@@ -189,17 +189,20 @@ where GitLab's carry `project_path` and `iid`, and a deployment carries `ref`,
 }
 ```
 
-## The live view's report
+## The latest fetch's report
 
-Each report the live view gets from a fetch is saved to `report.json` beside the
-state files, with the hosts it read and when. `prtop watch` renders from it
-instead of fetching when it reads the same hosts and is under `-d` seconds old,
-so a watch next to an open live view makes no forge calls and never moves the
-merge-detection baseline. The demo saves nothing.
+Every fetch, whether the live view's, a one-shot table's or `prtop watch`'s,
+goes through `fetch_report`. It saves its report to `report.json` beside the
+state files, with the settings it ran under (`repr(config)`) and the time it
+came back. A fetch asked for less than `FRESH_FOR` (10 seconds) later, under the
+same settings, reads that report instead of calling the forges. Several prtops
+running at once share their calls that way, whatever their delays, and the one
+that reads never moves the merge-detection baseline. The demo neither reads nor
+saves it.
 
 ```jsonc
 {
-  "hosts": ["gitlab.example.com", "github.com"],
+  "config": "Config(state_dir=…, forges=('gitlab', 'github'), …)",
   "fetched_at": "<ISO 8601>",
   "show_task": true,
   "action_needed": false,

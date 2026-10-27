@@ -1,12 +1,14 @@
-"""The state directory: what the previous fetch saw, and the live view's latest report."""
+"""The state directory: what the previous fetch saw, and the latest fetch's report."""
 
 import io
 import tempfile
 import unittest
 from contextlib import redirect_stderr
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from prtop.config import Config
 from prtop.report import Report, Row, hyperlink
 from prtop.state import load_report, load_state, save_report, save_state
 
@@ -38,7 +40,6 @@ class StateFile(unittest.TestCase):
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
 
 
-HOSTS = ("gitlab.example.com", "github.com")
 FETCHED_AT = datetime(2026, 10, 27, 14, 0, tzinfo=UTC)
 REPORT = Report(
     [
@@ -52,40 +53,40 @@ REPORT = Report(
 )
 
 
-class LiveReport(unittest.TestCase):
+class LatestReport(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.path = Path(tmp.name) / "prtop" / "report.json"
+        self.config = Config(state_dir=Path(tmp.name) / "prtop", forges=("gitlab", "github"))
 
-    def read(self, seconds_later, hosts=HOSTS):
-        return load_report(self.path, hosts, FETCHED_AT + timedelta(seconds=seconds_later), timedelta(minutes=5))
+    def read(self, seconds_later, config=None):
+        later = FETCHED_AT + timedelta(seconds=seconds_later)
+        return load_report(config or self.config, later, timedelta(seconds=10))
 
-    def test_a_report_fetched_within_the_delay_reads_back_whole(self):
-        save_report(self.path, HOSTS, REPORT, FETCHED_AT)
-        self.assertEqual(self.read(299), REPORT)
-        self.assertEqual(self.read(299).text, REPORT.text)
+    def test_a_report_fetched_under_the_window_reads_back_whole(self):
+        save_report(self.config, REPORT, FETCHED_AT)
+        self.assertEqual(self.read(9), REPORT)
+        self.assertEqual(self.read(9).text, REPORT.text)
 
-    def test_a_report_as_old_as_the_delay_is_too_old_to_stand_in_for_a_fetch(self):
-        save_report(self.path, HOSTS, REPORT, FETCHED_AT)
-        self.assertIsNone(self.read(300))
+    def test_a_report_as_old_as_the_window_is_not_read(self):
+        save_report(self.config, REPORT, FETCHED_AT)
+        self.assertIsNone(self.read(10))
 
     def test_a_report_dated_in_the_future_is_not_read(self):
-        save_report(self.path, HOSTS, REPORT, FETCHED_AT)
+        save_report(self.config, REPORT, FETCHED_AT)
         self.assertIsNone(self.read(-1))
 
-    def test_a_report_of_other_forges_is_not_read(self):
-        save_report(self.path, HOSTS, REPORT, FETCHED_AT)
-        self.assertIsNone(self.read(0, hosts=("gitlab.example.com",)))
+    def test_a_report_fetched_under_other_settings_is_not_read(self):
+        save_report(self.config, REPORT, FETCHED_AT)
+        self.assertIsNone(self.read(0, replace(self.config, task_source="issues")))
 
-    def test_without_a_live_view_there_is_no_report(self):
+    def test_before_any_fetch_there_is_no_report(self):
         self.assertIsNone(self.read(0))
 
     def test_a_malformed_report_is_not_read(self):
-        self.path.parent.mkdir()
-        self.path.write_text('{"fetched_at": "yesterday"}')
+        self.config.state_dir.mkdir()
+        self.config.report_file.write_text('{"fetched_at": "yesterday"}')
         self.assertIsNone(self.read(0))
-
 
 if __name__ == "__main__":
     unittest.main()
