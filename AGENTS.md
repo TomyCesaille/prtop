@@ -244,3 +244,7 @@ PRTOP_STATE_DIR=/tmp/prtop-scratch prtop
   `test_a_deployment_that_shipped_leaves_the_report`.
 - Comments describe the code as it is, with no reference to what it used to be.
 - Commit titles follow Conventional Commits (`feat:`, `fix:`, `refactor:`…).
+- A pull request that changes what a user sees or runs adds its line to
+  [CHANGELOG.md](CHANGELOG.md), under `## [Unreleased]` and `Added`, `Changed`
+  or `Fixed`, in the same pull request. One that only touches docs, CI or tests
+  adds none.
