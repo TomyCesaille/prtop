@@ -94,6 +94,15 @@ class SeverityMarks(unittest.TestCase):
         self.assertEqual(fmt_status(model.CI_RUNNING, False, False)[0], RUNNING)
         self.assertEqual(fmt_status(model.MERGE_CHECK_RUNNING, False, False)[0], RUNNING)
 
+    def test_a_pipeline_that_failed_was_canceled_or_never_ran_is_on_you(self):
+        for status, cell in (
+            (model.CI_FAILED, "❌ CI failed, approved"),
+            (model.CI_CANCELED, "🛑 CI canceled, approved"),
+            (model.NO_PIPELINE, "💤 no pipeline, approved"),
+        ):
+            with self.subTest(status):
+                self.assertEqual(fmt_status(status, True, False), (ACT, cell))
+
     def test_a_status_the_forge_adds_later_surfaces_instead_of_sinking(self):
         mark, cell = fmt_status("some_status_from_the_future", False, False)
         self.assertEqual(mark, ANSWER)
@@ -226,13 +235,14 @@ class AccessibilityContract(unittest.TestCase):
         shared = {g: s for g, s in by_glyph.items() if len(s) > 1}
         expected = {
             # A pipeline in flight is a single state whether the MR is open or merged.
-            "⏳": {model.CI_RUNNING, model.CI_MUST_PASS, "deploy:pipeline_running"},
+            "⏳": {model.CI_RUNNING, "deploy:pipeline_running"},
             "🔍": {model.MERGE_CHECK_RUNNING, model.MERGE_CHECK_PENDING},
             # One meaning, two scopes: the monitor got no answer. `check failed`
             # is a single deployment's call, this is a whole instance.
             "🔌": {"unreachable_instance", "deploy:check_failed"},
-            # One meaning, two scopes: a run failed, the whole pipeline or its prod job.
-            "❌": {"deploy:pipeline_failed", "deploy:prod_failed"},
+            # One meaning, three scopes: a run failed, an open MR's pipeline, a
+            # merged one's, or its prod job.
+            "❌": {model.CI_FAILED, "deploy:pipeline_failed", "deploy:prod_failed"},
         }
         for glyph, states in shared.items():
             self.assertEqual(states, expected.get(glyph, set()), f"{glyph} means too many things")

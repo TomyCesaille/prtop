@@ -14,6 +14,9 @@ The first column says whose move it is. Act on it:
 | `!` | `rebase needed, …` | Offer to rebase it through the API. |
 | `!` | `conflicts, …` | Tell me, and offer to resolve them in a local checkout. |
 | `!` | `resolve own threads, approved` | Only threads I opened block the merge. Ask whether to resolve them and merge. |
+| `!` | `CI failed, …` | Read the failed jobs' logs and tell me what broke. Offer to fix what the change broke, or to retry a job that failed for a reason outside it. |
+| `!` | `CI canceled, …` | Offer to retry the pipeline. |
+| `!` | `no pipeline, …` | No pipeline ran on the last commit, and none starts on its own. Offer to start one. |
 | `!` | `instance unreachable` | The forge the row names did not answer, so its open merge requests are unaccounted for. Relay the error from stderr; if it happens again, suggest `glab auth status` or `gh auth status`. |
 | `?` | `changes requested, …` or `unresolved threads, …` | Sum up what the reviewers are waiting on, and offer to address it. |
 | `?` | a label prtop does not recognise | Report the raw label. |
@@ -42,6 +45,17 @@ glab api --hostname <host> --method PUT "projects/<encoded path>/merge_requests/
 glab api --hostname <host> --method POST "projects/<encoded path>/jobs/<job id>/play"
 ```
 
+The merge request's `head_pipeline.id` leads to the pipeline that must pass:
+
+```bash
+glab api --hostname <host> "projects/<encoded path>/merge_requests/<iid>"
+glab api --hostname <host> "projects/<encoded path>/pipelines/<pipeline id>/jobs?scope[]=failed"
+glab api --hostname <host> "projects/<encoded path>/jobs/<job id>/trace"
+glab api --hostname <host> --method POST "projects/<encoded path>/jobs/<job id>/retry"
+glab api --hostname <host> --method POST "projects/<encoded path>/pipelines/<pipeline id>/retry"
+glab api --hostname <host> --method POST "projects/<encoded path>/merge_requests/<iid>/pipelines"
+```
+
 On GitHub, an entry carries the `repo` (`owner/name`) and `number`, and a merged
 one the `prod_run_id` whose deployment waits for approval:
 
@@ -51,4 +65,13 @@ gh api --hostname github.com --method PUT "repos/<repo>/pulls/<number>/update-br
 gh api --hostname github.com "repos/<repo>/actions/runs/<run id>/pending_deployments"
 gh api --hostname github.com --method POST "repos/<repo>/actions/runs/<run id>/pending_deployments" \
   -F "environment_ids[]=<id>" -f state=approved -f comment="<why>"
+```
+
+The checks link to their runs, whose failed jobs carry the logs. `--repo
+github.com/<repo>` pins the host as `--hostname` does:
+
+```bash
+gh pr checks <number> --repo github.com/<repo>
+gh run view <run id> --repo github.com/<repo> --log-failed
+gh run rerun <run id> --repo github.com/<repo> --failed
 ```
