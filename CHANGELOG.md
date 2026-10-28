@@ -6,8 +6,15 @@ prtop's user-facing changes, newest first. The format follows
 
 ## [Unreleased]
 
-### Changed
+### Added
 
+- Several prtops running at once share their fetches: the live view, one-shot
+  tables and `prtop watch`. One about to fetch less than 10 seconds after another
+  fetched, with the same settings, shows that fetch instead of calling GitLab or
+  GitHub again. Each fetch saves its table to `report.json` in the state
+  directory.
+
+### Changed
 - On macOS and Linux, the live view keeps the mouse the way htop does: the wheel
   does not scroll the terminal's history behind the table. Selecting text takes
   Option in iTerm2, Shift in most other terminals.

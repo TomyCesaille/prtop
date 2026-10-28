@@ -11,6 +11,7 @@ otherwise:
 |---|---|---|
 | env file | `~/.config/prtop/.env` | `%APPDATA%\prtop\.env` |
 | state | `~/.local/state/prtop/<host>.json` | `%LOCALAPPDATA%\prtop\<host>.json` |
+| the latest fetch's report | `~/.local/state/prtop/report.json` | `%LOCALAPPDATA%\prtop\report.json` |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the base directory on every
 platform. On Windows the settings roam with the user's profile, while the state
@@ -63,6 +64,11 @@ class Config:
         """One file per forge, so reading two, or pointing prtop at another host,
         never reads one forge's MRs as having vanished from the other."""
         return self.state_dir / f"{re.sub(r'[^A-Za-z0-9.-]', '_', host)}.json"
+
+    @property
+    def report_file(self) -> Path:
+        """The latest fetch's report, shared between the prtops running at once."""
+        return self.state_dir / "report.json"
 
 
 def _text(name: str, value: str) -> str:

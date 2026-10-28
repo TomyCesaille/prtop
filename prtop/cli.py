@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import redirect_stderr
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from prtop import __version__, live, model
 from prtop.config import Config, ConfigError, load_config
@@ -33,12 +33,16 @@ from prtop.report import (
     open_row,
     unreachable_row,
 )
-from prtop.state import load_state, save_state
+from prtop.state import load_report, load_state, save_report, save_state
 from prtop.tasks import TaskSource, task_source
 from prtop.terminal import fullscreen
 
 DEFAULT_WATCH_DELAY = 300
 DEFAULT_WATCH_CAP = 7200
+# A fetch this recent stands in for a new one, whichever prtop made it, so the
+# live view, one-shot tables and watches running together share their calls
+# to the forges.
+FRESH_FOR = timedelta(seconds=10)
 
 
 def track_merges(forge: Forge, current: dict, previous: dict, deployments: dict) -> dict:
@@ -117,6 +121,21 @@ def run_check(config: Config, forges: list[Forge], tasks: TaskSource) -> Report:
     # green would otherwise claim all-clear over MRs nobody saw.
     action_needed = any(row.mark == ACT for row in open_rows)
     return Report(assemble_rows(open_rows, deploy_rows), tasks.shows_column, action_needed)
+
+
+def fetch_report(
+    config: Config,
+    forges: list[Forge],
+    tasks: TaskSource,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> Report:
+    """The latest fetch of a prtop with the same settings when it is under
+    `FRESH_FOR` old, a fetch of this one's otherwise."""
+    report = load_report(config, now(), FRESH_FOR)
+    if report is None:
+        report = run_check(config, forges, tasks)
+        save_report(config, report, now())
+    return report
 
 
 # ---------- Terminal tab color ----------
@@ -199,10 +218,12 @@ def watch(
     *,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
     """Check every `delay` seconds and exit as soon as the report changes, so
     a backgrounded run re-invokes the agent that started it exactly when
-    something needs attention. The first check only records a baseline.
+    something needs attention. The first check only records a baseline. A
+    check made within 10 seconds of another prtop's fetch reads that fetch.
 
     Exits 0 on a change or after `cap` quiet seconds (with a TIMEOUT line), and
     1 when a check fails.
@@ -211,7 +232,7 @@ def watch(
     baseline = None
     while True:
         try:
-            report = run_check(config, forges, tasks)
+            report = fetch_report(config, forges, tasks, now)
         except ForgeError as e:
             print(f"prtop: {e}", file=sys.stderr)
             print("[watch] check failed", flush=True)
@@ -310,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             return watch(config, forges, tasks, args.delay, args.cap)
 
         def fetch() -> Report:
-            return run_check(config, forges, tasks)
+            return fetch_report(config, forges, tasks)
 
         title, on_report = " + ".join(forge.host for forge in forges), tab_color_hook(config)
 

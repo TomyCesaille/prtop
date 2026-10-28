@@ -6,11 +6,12 @@ import runpy
 import tempfile
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 from prtop import model
-from prtop.cli import batch, main, parse_args, run_check, show_live, tab_color_hook, watch
+from prtop.cli import batch, fetch_report, main, parse_args, run_check, show_live, tab_color_hook, watch
 from prtop.config import Config, ConfigError
 from prtop.forges import make_forges
 from prtop.forges.github import GitHub
@@ -18,9 +19,11 @@ from prtop.forges.gitlab import GitLab
 from prtop.live import View
 from prtop.model import DeployState, ForgeError
 from prtop.report import NOTHING_OPEN, Report, plain
+from prtop.state import save_report
 from prtop.tasks import NoTasks, Task
 
 HOST = "gitlab.example.com"
+EPOCH = datetime(2026, 10, 27, 14, 0, tzinfo=UTC)
 
 
 def entry(iid, status=model.AWAITING_REVIEW, *, approved=False, title=None):
@@ -46,8 +49,10 @@ class FakeForge:
         self.states: dict[str, DeployState] = {}
         self.asked_about_merges: list[int] = []
         self.merge_check_error: str | None = None
+        self.listings = 0
 
     def open_merge_requests(self, tasks):
+        self.listings += 1
         if self.error:
             raise ForgeError(self.error)
         return dict(self.open)
@@ -262,7 +267,7 @@ class SeveralForges(unittest.TestCase):
         out = io.StringIO()
         with redirect_stdout(out):
             code = watch(self.config, [self.gitlab, self.github], NoTasks(), 300, 900,
-                         sleep=trade, clock=lambda: clock[0])
+                         sleep=trade, clock=lambda: clock[0], now=lambda: EPOCH + timedelta(seconds=clock[0]))
         self.assertEqual(code, 0)
         self.assertNotIn("TIMEOUT", out.getvalue())
         self.assertEqual(out.getvalue().count("no change"), 1)
@@ -300,8 +305,12 @@ class Watch(unittest.TestCase):
         self.change_after = change_after
         out = io.StringIO()
         with redirect_stdout(out):
-            code = watch(self.config, [self.forge], NoTasks(), 300, cap, sleep=self.sleep, clock=lambda: self.now)
+            code = watch(self.config, [self.forge], NoTasks(), 300, cap,
+                         sleep=self.sleep, clock=lambda: self.now, now=self.wall_clock)
         return code, out.getvalue()
+
+    def wall_clock(self):
+        return EPOCH + timedelta(seconds=self.now)
 
     def test_it_exits_with_the_report_as_soon_as_something_changes(self):
         code, out = self.watch(change_after=2)
@@ -323,6 +332,42 @@ class Watch(unittest.TestCase):
             code, out = self.watch()
         self.assertEqual(code, 1)
         self.assertIn("check failed", out)
+
+    def test_a_check_within_10_seconds_of_another_prtops_fetch_reads_that_fetch(self):
+        self.now = -9
+        fetch_report(self.config, [self.forge], NoTasks(), self.wall_clock)
+        self.now = 0
+        self.watch(cap=300)
+        self.assertEqual(self.forge.listings, 1 + 1)
+
+
+class SharedFetch(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = Config(state_dir=Path(tmp.name))
+        self.forge = FakeForge()
+        self.forge.open = {"frontend!1": entry(1)}
+
+    def fetch(self, seconds):
+        return fetch_report(self.config, [self.forge], NoTasks(), lambda: EPOCH + timedelta(seconds=seconds))
+
+    def test_a_fetch_under_10_seconds_old_stands_in_for_a_new_one(self):
+        first = self.fetch(0)
+        self.forge.open = {}
+        self.assertEqual(self.fetch(9.9), first)
+        self.assertEqual(self.forge.listings, 1)
+
+    def test_a_fetch_10_seconds_old_is_made_again(self):
+        self.fetch(0)
+        self.forge.open = {}
+        self.assertEqual(self.fetch(10).text, NOTHING_OPEN)
+        self.assertEqual(self.forge.listings, 2)
+
+    def test_a_fetch_under_other_settings_is_made_again(self):
+        save_report(Config(state_dir=self.config.state_dir, deploy_tracking=False), Report([], False, False), EPOCH)
+        self.fetch(0)
+        self.assertEqual(self.forge.listings, 1)
 
 
 class Batch(unittest.TestCase):
@@ -411,6 +456,12 @@ class Main(unittest.TestCase):
             self.assertEqual(main([]), 0)
         self.assertIn("feat: on gitlab", out.getvalue())
         self.assertIn("feat: on github", out.getvalue())
+
+    def test_two_tables_asked_for_seconds_apart_share_one_fetch(self):
+        with redirect_stdout(io.StringIO()):
+            main([])
+            main([])
+        self.assertEqual([forge.listings for forge in self.forges], [1, 1])
 
     def test_watch_checks_every_forge(self):
         with mock.patch("prtop.cli.watch", return_value=0) as watching:
