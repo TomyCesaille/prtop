@@ -241,9 +241,11 @@ class BlockedPullRequests(unittest.TestCase):
         pr = pull_request(decision="APPROVED", checks="PENDING")
         self.assertEqual(state_of(pr), (model.CI_RUNNING, "⏳ CI running, approved"))
 
-    def test_failing_required_checks_must_pass(self):
-        pr = pull_request(decision="APPROVED", checks="ERROR")
-        self.assertEqual(review_state(pr, never_asked, ME)[0], model.CI_MUST_PASS)
+    def test_failing_required_checks_are_on_you(self):
+        for checks in ("FAILURE", "ERROR"):
+            with self.subTest(checks):
+                pr = pull_request(decision="APPROVED", checks=checks)
+                self.assertEqual(state_of(pr), (model.CI_FAILED, "❌ CI failed, approved"))
 
     def test_a_reviewers_thread_outranks_the_checks(self):
         pr = pull_request(decision="APPROVED", checks="FAILURE", threads=[False])

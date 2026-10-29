@@ -175,7 +175,7 @@ def review_state(pr: dict, threads: Callable[[], list[dict]], login: str) -> tup
         case "PENDING" | "EXPECTED":
             return model.CI_RUNNING, True
         case "FAILURE" | "ERROR":
-            return model.CI_MUST_PASS, True
+            return model.CI_FAILED, True
     if unresolved:
         return model.UNRESOLVED_THREADS, False
     return model.BLOCKED, True

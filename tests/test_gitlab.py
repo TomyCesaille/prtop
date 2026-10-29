@@ -7,6 +7,7 @@ from unittest import mock
 from prtop import model
 from prtop.config import Config
 from prtop.forges.gitlab import (
+    MUST_PASS_PIPELINE,
     REVIEW_STATUS,
     GitLab,
     project_path_from_summary,
@@ -134,7 +135,30 @@ class OpenMergeRequests(unittest.TestCase):
         self.assertEqual(entry["status"], "some_status_from_the_future")
 
     def test_every_gitlab_status_maps_to_a_state_the_report_knows(self):
-        self.assertLessEqual(set(REVIEW_STATUS.values()), set(REVIEW_SIGNAL) | {model.MERGEABLE})
+        known = set(REVIEW_SIGNAL) | {model.MERGEABLE}
+        self.assertLessEqual(set(REVIEW_STATUS.values()) | set(MUST_PASS_PIPELINE.values()), known)
+
+    def must_pass(self, head_pipeline):
+        mr = open_mr("ci_must_pass", head_pipeline=head_pipeline)
+        return FakeGitLab(mr).open_merge_requests(NoTasks())[KEY]["status"]
+
+    def test_a_pipeline_that_failed_was_canceled_or_never_ran_is_on_you(self):
+        for head_pipeline, status in (
+            ({"status": "failed"}, model.CI_FAILED),
+            ({"status": "canceled"}, model.CI_CANCELED),
+            ({"status": "canceling"}, model.CI_CANCELED),
+            (None, model.NO_PIPELINE),
+        ):
+            with self.subTest(head_pipeline):
+                self.assertEqual(self.must_pass(head_pipeline), status)
+
+    def test_a_pipeline_about_to_start_is_on_the_machine(self):
+        for pipeline_status in ("created", "scheduled"):
+            with self.subTest(pipeline_status):
+                self.assertEqual(self.must_pass({"status": pipeline_status}), model.CI_RUNNING)
+
+    def test_a_pipeline_that_must_pass_in_any_other_status_shows_that_status(self):
+        self.assertEqual(self.must_pass({"status": "manual"}), "pipeline manual")
 
     def test_threads_only_you_wrote_in_do_not_await_you(self):
         responses = open_mr("discussions_not_resolved")

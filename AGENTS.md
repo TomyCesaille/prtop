@@ -114,6 +114,9 @@ Adding a state means choosing its mark first and its glyph last. The
   merge request in review that fell behind its target is found through
   `diverged_commits_count`.
 - `/discussions` paginates; a bot-reviewed merge request runs past one page.
+- `ci_must_pass` stands for any head pipeline that did not succeed and is not
+  running, so the merge request's `head_pipeline.status` says what it waits on:
+  failed, canceled or missing is on you, created or scheduled starts by itself.
 - Right after a merge, the branch pipeline may not exist yet: the merge commit's
   pipeline is looked for a few times before the latest one stands in.
 
@@ -241,3 +244,7 @@ PRTOP_STATE_DIR=/tmp/prtop-scratch prtop
   `test_a_deployment_that_shipped_leaves_the_report`.
 - Comments describe the code as it is, with no reference to what it used to be.
 - Commit titles follow Conventional Commits (`feat:`, `fix:`, `refactor:`…).
+- A pull request that changes what a user sees or runs adds its line to
+  [CHANGELOG.md](CHANGELOG.md), under `## [Unreleased]` and `Added`, `Changed`
+  or `Fixed`, in the same pull request. One that only touches docs, CI or tests
+  adds none.

@@ -25,7 +25,8 @@ from prtop.tasks import Issue, TaskSource
 GLAB_URL = "https://gitlab.com/gitlab-org/cli"
 
 # GitLab's `detailed_merge_status`, onto prtop's review states. A status missing
-# here passes through raw and shows up as unrecognised.
+# here passes through raw and shows up as unrecognised. `ci_must_pass` is told
+# apart by its pipeline, below.
 REVIEW_STATUS = {
     "draft_status": model.DRAFT,
     "not_approved": model.AWAITING_REVIEW,
@@ -34,11 +35,27 @@ REVIEW_STATUS = {
     "need_rebase": model.REBASE_NEEDED,
     "conflict": model.CONFLICTS,
     "ci_still_running": model.CI_RUNNING,
-    "ci_must_pass": model.CI_MUST_PASS,
     "checking": model.MERGE_CHECK_RUNNING,
     "unchecked": model.MERGE_CHECK_PENDING,
     "blocked_status": model.BLOCKED,
     "mergeable": model.MERGEABLE,
+}
+
+# `ci_must_pass` names a head pipeline that did not succeed and is not running,
+# by its status: one that fails, was canceled or never started waits on you, one
+# created or scheduled starts by itself. A status missing here passes through
+# as `pipeline <status>` and shows up as unrecognised.
+MUST_PASS_PIPELINE = {
+    "failed": model.CI_FAILED,
+    "canceled": model.CI_CANCELED,
+    "canceling": model.CI_CANCELED,
+    None: model.NO_PIPELINE,
+    "created": model.CI_RUNNING,
+    "scheduled": model.CI_RUNNING,
+    "waiting_for_resource": model.CI_RUNNING,
+    "preparing": model.CI_RUNNING,
+    "pending": model.CI_RUNNING,
+    "running": model.CI_RUNNING,
 }
 
 
@@ -111,6 +128,11 @@ class GitLab:
         # that fell behind its target would only say so once approved.
         if detailed == "not_approved" and not full.get("draft") and full.get("diverged_commits_count"):
             detailed = "need_rebase"
+        if detailed == "ci_must_pass":
+            pipeline = (full.get("head_pipeline") or {}).get("status")
+            status = MUST_PASS_PIPELINE.get(pipeline, f"pipeline {pipeline}")
+        else:
+            status = REVIEW_STATUS.get(detailed, detailed)
         threads_await_user = True
         # The extra calls earn their place only when threads are what blocks the merge.
         # A bot-reviewed MR runs past a page of discussions, and a single reviewer
@@ -126,7 +148,7 @@ class GitLab:
             "title": full.get("title", ""),
             "task": task.label if task else "",
             "task_url": task.url if task else None,
-            "status": REVIEW_STATUS.get(detailed, detailed),
+            "status": status,
             "fully_approved": bool(approvals.get("approved")),
             "has_conflicts": bool(full.get("has_conflicts")),
             "threads_await_user": threads_await_user,
