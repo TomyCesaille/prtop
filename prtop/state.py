@@ -4,20 +4,62 @@ seconds later reads instead."""
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import sys
+import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from prtop.config import Config
 from prtop.report import Report, Row
 
+# A write is tried up to this many times when its directory disappears under it,
+# or when Windows refuses the replace while another prtop reads the file.
+WRITE_ATTEMPTS = 3
+RETRY_PAUSE_SECONDS = 0.1
+# A write takes milliseconds: a temporary file this old was left by a prtop
+# killed in the middle of one.
+ORPHANED_AFTER_SECONDS = 60
+
 
 def _write(path: Path, data: dict) -> None:
+    text = json.dumps(data, indent=2)
+    for _ in range(WRITE_ATTEMPTS - 1):
+        try:
+            _replace(path, text)
+        except (FileNotFoundError, PermissionError):
+            time.sleep(RETRY_PAUSE_SECONDS)
+        else:
+            return
+    _replace(path, text)
+
+
+def _replace(path: Path, text: str) -> None:
+    """`path` holds `text` whole or not at all. Each write has a temporary file
+    of its own, so prtops saving the same file at once never move each other's."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    _remove_orphans(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _remove_orphans(path: Path) -> None:
+    cutoff = time.time() - ORPHANED_AFTER_SECONDS
+    for tmp in path.parent.glob(f"{path.name}*.tmp"):
+        # Another prtop may remove the same orphan first, and an orphan that
+        # cannot be removed now is left for a later save.
+        with contextlib.suppress(OSError):
+            if tmp.stat().st_mtime < cutoff:
+                tmp.unlink()
 
 
 def load_state(path: Path) -> dict:
