@@ -22,6 +22,9 @@ prtop's user-facing changes, newest first. The format follows
 
 ### Fixed
 
+- Several prtops saving the same state file at the same moment no longer crash
+  with `FileNotFoundError`. A state directory removed while prtop writes into it
+  is made again.
 - A merge request whose pipeline failed, was canceled or never ran reads as on
   you (`!`): `CI failed`, `CI canceled` or `no pipeline`, where it read as
   `CI must pass`, on a machine. On GitHub, failing required checks read as

@@ -5,19 +5,43 @@ seconds later reads instead."""
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from prtop.config import Config
 from prtop.report import Report, Row
 
+# A state directory removed while prtop writes into it is made again, up to this
+# many times in a row before the write fails.
+WRITE_ATTEMPTS = 3
+
 
 def _write(path: Path, data: dict) -> None:
+    text = json.dumps(data, indent=2)
+    for _ in range(WRITE_ATTEMPTS - 1):
+        try:
+            _replace(path, text)
+        except FileNotFoundError:
+            continue
+        return
+    _replace(path, text)
+
+
+def _replace(path: Path, text: str) -> None:
+    """`path` holds `text` whole or not at all. Each write has a temporary file
+    of its own, so prtops saving the same file at once never move each other's."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def load_state(path: Path) -> dict:

@@ -1,16 +1,19 @@
 """The state directory: what the previous fetch saw, and the latest fetch's report."""
 
 import io
+import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from prtop.config import Config
 from prtop.report import Report, Row, hyperlink
-from prtop.state import load_report, load_state, save_report, save_state
+from prtop.state import WRITE_ATTEMPTS, load_report, load_state, save_report, save_state
 
 FRESH = {"open_mrs": {}, "deployments": {}, "last_checked": None}
 
@@ -38,6 +41,52 @@ class StateFile(unittest.TestCase):
         self.assertEqual(state["open_mrs"], {"web!1": {"title": "équipe"}})
         self.assertIsNotNone(state["last_checked"])
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
+
+    def replace_after(self, before_replacing):
+        """`os.replace`, with `before_replacing` run before each call."""
+        calls = []
+
+        def replacing(src, dst):
+            calls.append(src)
+            before_replacing(len(calls))
+            real_replace(src, dst)
+
+        real_replace = os.replace
+        return patch("os.replace", side_effect=replacing), calls
+
+    def test_two_prtops_saving_at_the_same_moment_both_save(self):
+        def another_prtop_saves(call):
+            if call == 1:
+                save_state(self.path, {"open_mrs": {"web!2": {}}, "deployments": {}})
+
+        patched, _ = self.replace_after(another_prtop_saves)
+        with patched:
+            save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
+        self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
+
+    def test_a_state_directory_removed_during_the_save_is_made_again(self):
+        def directory_removed(call):
+            if call == 1:
+                shutil.rmtree(self.path.parent)
+
+        patched, calls = self.replace_after(directory_removed)
+        with patched:
+            save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
+        self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
+        self.assertEqual(len(calls), 2)
+
+    def test_a_state_directory_that_keeps_disappearing_fails_the_save(self):
+        patched, calls = self.replace_after(lambda call: shutil.rmtree(self.path.parent))
+        with patched, self.assertRaises(FileNotFoundError):
+            save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertEqual(len(calls), WRITE_ATTEMPTS)
+
+    def test_a_save_that_fails_leaves_no_temporary_file(self):
+        no_space = OSError("No space left on device")
+        with patch("os.replace", side_effect=no_space), self.assertRaises(OSError):
+            save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertEqual(list(self.path.parent.iterdir()), [])
 
 
 FETCHED_AT = datetime(2026, 10, 27, 14, 0, tzinfo=UTC)
