@@ -16,6 +16,7 @@ from prtop.config import Config
 from prtop.report import Report, Row, hyperlink
 from prtop.state import (
     ORPHANED_AFTER_SECONDS,
+    RETRY_PAUSE_SECONDS,
     WRITE_ATTEMPTS,
     load_report,
     load_state,
@@ -31,6 +32,9 @@ class StateFile(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "prtop" / "github.com.json"
+        pause = patch("prtop.state.time.sleep")
+        self.pauses = pause.start()
+        self.addCleanup(pause.stop)
 
     def test_the_first_fetch_starts_from_nothing(self):
         self.assertEqual(load_state(self.path), FRESH)
@@ -50,13 +54,12 @@ class StateFile(unittest.TestCase):
         self.assertIsNotNone(state["last_checked"])
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
 
-    def replace_after(self, before_replacing):
-        """`os.replace`, with `before_replacing` run before each call."""
+    def patch_replace(self, run_before):
         calls = []
 
         def replacing(src, dst):
             calls.append(src)
-            before_replacing(len(calls))
+            run_before(len(calls))
             real_replace(src, dst)
 
         real_replace = os.replace
@@ -67,7 +70,7 @@ class StateFile(unittest.TestCase):
             if call == 1:
                 save_state(self.path, {"open_mrs": {"web!2": {}}, "deployments": {}})
 
-        patched, _ = self.replace_after(another_prtop_saves)
+        patched, _ = self.patch_replace(another_prtop_saves)
         with patched:
             save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
         self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
@@ -78,17 +81,40 @@ class StateFile(unittest.TestCase):
             if call == 1:
                 shutil.rmtree(self.path.parent)
 
-        patched, calls = self.replace_after(directory_removed)
+        patched, calls = self.patch_replace(directory_removed)
         with patched:
             save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
         self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
         self.assertEqual(len(calls), 2)
 
     def test_a_state_directory_that_keeps_disappearing_fails_the_save(self):
-        patched, calls = self.replace_after(lambda call: shutil.rmtree(self.path.parent))
+        patched, calls = self.patch_replace(lambda call: shutil.rmtree(self.path.parent))
         with patched, self.assertRaises(FileNotFoundError):
             save_state(self.path, {"open_mrs": {}, "deployments": {}})
         self.assertEqual(len(calls), WRITE_ATTEMPTS)
+
+    def test_a_file_another_prtop_reads_on_windows_is_replaced_once_it_is_let_go(self):
+        def read_by_another_prtop(call):
+            if call == 1:
+                raise PermissionError(13, "Access is denied")
+
+        patched, calls = self.patch_replace(read_by_another_prtop)
+        with patched:
+            save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
+        self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
+        self.assertEqual(len(calls), 2)
+        self.pauses.assert_called_once_with(RETRY_PAUSE_SECONDS)
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
+
+    def test_a_file_that_stays_locked_fails_the_save(self):
+        def locked(call):
+            raise PermissionError(13, "Access is denied")
+
+        patched, calls = self.patch_replace(locked)
+        with patched, self.assertRaises(PermissionError):
+            save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertEqual(len(calls), WRITE_ATTEMPTS)
+        self.assertEqual(list(self.path.parent.iterdir()), [])
 
     def test_a_save_that_fails_leaves_no_temporary_file(self):
         no_space = OSError("No space left on device")
@@ -107,6 +133,7 @@ class StateFile(unittest.TestCase):
     def test_temporary_files_left_by_a_killed_prtop_are_removed_by_the_next_save(self):
         self.temporary_file("github.com.json.k1ll3d.tmp", ORPHANED_AFTER_SECONDS + 1)
         self.temporary_file("github.com.json.0ld3r.tmp", 3600)
+        self.temporary_file("github.com.json.tmp", 3600)
         save_state(self.path, {"open_mrs": {}, "deployments": {}})
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
 
@@ -132,6 +159,20 @@ class StateFile(unittest.TestCase):
         with patch.object(Path, "stat", removed_by_another_prtop):
             save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
         self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
+
+    def test_an_orphan_that_cannot_be_removed_does_not_fail_the_save(self):
+        orphan = self.temporary_file("github.com.json.k1ll3d.tmp", 3600)
+        real_unlink = Path.unlink
+
+        def access_denied_on_the_orphan(path, *args, **kwargs):
+            if path == orphan:
+                raise PermissionError(13, "Access is denied")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", access_denied_on_the_orphan):
+            save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
+        self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
+        self.assertTrue(orphan.exists())
 
 
 FETCHED_AT = datetime(2026, 10, 27, 14, 0, tzinfo=UTC)

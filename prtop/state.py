@@ -16,9 +16,10 @@ from pathlib import Path
 from prtop.config import Config
 from prtop.report import Report, Row
 
-# A state directory removed while prtop writes into it is made again, up to this
-# many times in a row before the write fails.
+# A write is tried up to this many times when its directory disappears under it,
+# or when Windows refuses the replace while another prtop reads the file.
 WRITE_ATTEMPTS = 3
+RETRY_PAUSE_SECONDS = 0.1
 # A write takes milliseconds: a temporary file this old was left by a prtop
 # killed in the middle of one.
 ORPHANED_AFTER_SECONDS = 60
@@ -29,9 +30,10 @@ def _write(path: Path, data: dict) -> None:
     for _ in range(WRITE_ATTEMPTS - 1):
         try:
             _replace(path, text)
-        except FileNotFoundError:
-            continue
-        return
+        except (FileNotFoundError, PermissionError):
+            time.sleep(RETRY_PAUSE_SECONDS)
+        else:
+            return
     _replace(path, text)
 
 
@@ -52,9 +54,10 @@ def _replace(path: Path, text: str) -> None:
 
 def _remove_orphans(path: Path) -> None:
     cutoff = time.time() - ORPHANED_AFTER_SECONDS
-    for tmp in path.parent.glob(f"{path.name}.*.tmp"):
-        # Another prtop may remove the same orphan first.
-        with contextlib.suppress(FileNotFoundError):
+    for tmp in path.parent.glob(f"{path.name}*.tmp"):
+        # Another prtop may remove the same orphan first, and an orphan that
+        # cannot be removed now is left for a later save.
+        with contextlib.suppress(OSError):
             if tmp.stat().st_mtime < cutoff:
                 tmp.unlink()
 
