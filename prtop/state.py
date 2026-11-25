@@ -4,10 +4,12 @@ seconds later reads instead."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +19,9 @@ from prtop.report import Report, Row
 # A state directory removed while prtop writes into it is made again, up to this
 # many times in a row before the write fails.
 WRITE_ATTEMPTS = 3
+# A write takes milliseconds: a temporary file this old was left by a prtop
+# killed in the middle of one.
+ORPHANED_AFTER_SECONDS = 60
 
 
 def _write(path: Path, data: dict) -> None:
@@ -34,6 +39,7 @@ def _replace(path: Path, text: str) -> None:
     """`path` holds `text` whole or not at all. Each write has a temporary file
     of its own, so prtops saving the same file at once never move each other's."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_orphans(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
@@ -42,6 +48,15 @@ def _replace(path: Path, text: str) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def _remove_orphans(path: Path) -> None:
+    cutoff = time.time() - ORPHANED_AFTER_SECONDS
+    for tmp in path.parent.glob(f"{path.name}.*.tmp"):
+        # Another prtop may remove the same orphan first.
+        with contextlib.suppress(FileNotFoundError):
+            if tmp.stat().st_mtime < cutoff:
+                tmp.unlink()
 
 
 def load_state(path: Path) -> dict:

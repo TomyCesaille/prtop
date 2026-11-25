@@ -4,6 +4,7 @@ import io
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from dataclasses import replace
@@ -13,7 +14,14 @@ from unittest.mock import patch
 
 from prtop.config import Config
 from prtop.report import Report, Row, hyperlink
-from prtop.state import WRITE_ATTEMPTS, load_report, load_state, save_report, save_state
+from prtop.state import (
+    ORPHANED_AFTER_SECONDS,
+    WRITE_ATTEMPTS,
+    load_report,
+    load_state,
+    save_report,
+    save_state,
+)
 
 FRESH = {"open_mrs": {}, "deployments": {}, "last_checked": None}
 
@@ -87,6 +95,43 @@ class StateFile(unittest.TestCase):
         with patch("os.replace", side_effect=no_space), self.assertRaises(OSError):
             save_state(self.path, {"open_mrs": {}, "deployments": {}})
         self.assertEqual(list(self.path.parent.iterdir()), [])
+
+    def temporary_file(self, name, seconds_old):
+        self.path.parent.mkdir(exist_ok=True)
+        tmp = self.path.parent / name
+        tmp.write_text("{")
+        written = time.time() - seconds_old
+        os.utime(tmp, (written, written))
+        return tmp
+
+    def test_temporary_files_left_by_a_killed_prtop_are_removed_by_the_next_save(self):
+        self.temporary_file("github.com.json.k1ll3d.tmp", ORPHANED_AFTER_SECONDS + 1)
+        self.temporary_file("github.com.json.0ld3r.tmp", 3600)
+        save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["github.com.json"])
+
+    def test_a_temporary_file_another_prtop_is_writing_stays(self):
+        writing = self.temporary_file("github.com.json.wr1t3.tmp", 1)
+        save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertTrue(writing.exists())
+
+    def test_the_temporary_files_of_other_files_stay(self):
+        report = self.temporary_file("report.json.k1ll3d.tmp", 3600)
+        save_state(self.path, {"open_mrs": {}, "deployments": {}})
+        self.assertTrue(report.exists())
+
+    def test_an_orphan_another_prtop_removes_first_does_not_fail_the_save(self):
+        orphan = self.temporary_file("github.com.json.k1ll3d.tmp", 3600)
+        real_stat = Path.stat
+
+        def removed_by_another_prtop(path, *args, **kwargs):
+            if path == orphan:
+                path.unlink(missing_ok=True)
+            return real_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", removed_by_another_prtop):
+            save_state(self.path, {"open_mrs": {"web!1": {}}, "deployments": {}})
+        self.assertEqual(load_state(self.path)["open_mrs"], {"web!1": {}})
 
 
 FETCHED_AT = datetime(2026, 10, 27, 14, 0, tzinfo=UTC)
