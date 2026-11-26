@@ -11,12 +11,18 @@ import subprocess
 
 from prtop.model import ForgeError
 
+# A connection the network dropped without closing it never answers: past this,
+# the call fails and the forge reads as unreachable instead of freezing the fetch.
+TIMEOUT_SECONDS = 60
+
 
 def run_tool(cmd: list[str], install_url: str) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(cmd, capture_output=True, encoding="utf-8", check=False)
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", check=False, timeout=TIMEOUT_SECONDS)
     except FileNotFoundError:
         raise ForgeError(f"{cmd[0]} is not installed: {install_url}") from None
+    except subprocess.TimeoutExpired:
+        raise ForgeError(f"{shlex.join(cmd)} did not answer within {TIMEOUT_SECONDS} seconds") from None
 
 
 def failure(what: str, result: subprocess.CompletedProcess[str]) -> ForgeError:

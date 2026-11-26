@@ -1,6 +1,7 @@
 """The forge command-line tools prtop runs, `glab` and `gh`."""
 
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -19,6 +20,11 @@ class Commands(unittest.TestCase):
         missing = mock.patch("subprocess.run", side_effect=FileNotFoundError)
         with missing, self.assertRaisesRegex(ForgeError, f"gh is not installed: {URL}"):
             get_json(["gh", "api", "user"], URL)
+
+    def test_a_command_that_never_answers_fails_once_the_wait_is_over(self):
+        short_wait = mock.patch("prtop.forges.command.TIMEOUT_SECONDS", 0.2)
+        with short_wait, self.assertRaisesRegex(ForgeError, r"sleep\(30\)' did not answer within 0\.2 seconds$"):
+            get_json([sys.executable, "-c", "import time; time.sleep(30)"], URL)
 
     def test_a_failing_command_is_named_with_what_it_printed(self):
         refused = mock.patch("subprocess.run", return_value=finished(1, stderr="401 Unauthorized\n"))
