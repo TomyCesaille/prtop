@@ -27,6 +27,9 @@ prtop's user-facing changes, newest first. The format follows
   one reads it. A state directory removed while prtop writes into it
   is made again, and a save removes the temporary files a prtop killed in the
   middle of one left behind.
+- A `glab` or `gh` call that never answers, on a connection the network dropped,
+  no longer freezes prtop: after 60 seconds it fails, and its forge reads as
+  unreachable until the next fetch.
 - A merge request whose pipeline failed, was canceled or never ran reads as on
   you (`!`): `CI failed`, `CI canceled` or `no pipeline`, where it read as
   `CI must pass`, on a machine. On GitHub, failing required checks read as
